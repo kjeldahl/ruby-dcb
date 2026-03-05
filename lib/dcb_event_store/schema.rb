@@ -9,6 +9,7 @@ module DcbEventStore
         tags              TEXT[] NOT NULL DEFAULT '{}',
         causation_id      UUID,
         correlation_id    UUID,
+        schema_version    INTEGER NOT NULL DEFAULT 1,
         created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events (event_id);

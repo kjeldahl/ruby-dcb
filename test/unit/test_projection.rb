@@ -44,7 +44,7 @@ class TestProjection < Minitest::Test
     DcbEventStore::SequencedEvent.new(
       sequence_position: sequence_position, type: type, data: data, tags: tags,
       created_at: Time.now, id: SecureRandom.uuid,
-      causation_id: nil, correlation_id: nil
+      causation_id: nil, correlation_id: nil, schema_version: 1
     )
   end
 

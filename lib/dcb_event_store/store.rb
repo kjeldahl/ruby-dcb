@@ -6,8 +6,9 @@ module DcbEventStore
     BATCH_SIZE = 1000
     APPEND_LOCK_KEY = 0
 
-    def initialize(conn)
+    def initialize(conn, upcaster: nil)
       @conn = conn
+      @upcaster = upcaster
     end
 
     def read(query)
@@ -56,13 +57,13 @@ module DcbEventStore
         sequenced = events.filter_map do |event|
           result = @conn.exec_params(
             <<~SQL,
-              INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id)
-              VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6)
+              INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+              VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
               ON CONFLICT (event_id) DO NOTHING
               RETURNING sequence_position, created_at
             SQL
             [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
-             event.causation_id, event.correlation_id]
+             event.causation_id, event.correlation_id, 1]
           )
           next nil if result.ntuples == 0
 
@@ -75,7 +76,8 @@ module DcbEventStore
             created_at: Time.parse(row["created_at"]),
             id: event.id,
             causation_id: event.causation_id,
-            correlation_id: event.correlation_id
+            correlation_id: event.correlation_id,
+            schema_version: 1
           )
         end
 
@@ -153,15 +155,24 @@ module DcbEventStore
     end
 
     def row_to_sequenced_event(row)
+      type = row["type"]
+      data = JSON.parse(row["data"], symbolize_names: true)
+      version = row["schema_version"].to_i
+
+      if @upcaster
+        data, version = @upcaster.upcast(type, data, version)
+      end
+
       SequencedEvent.new(
         sequence_position: row["sequence_position"].to_i,
-        type: row["type"],
-        data: JSON.parse(row["data"], symbolize_names: true),
+        type: type,
+        data: data,
         tags: parse_pg_array(row["tags"]),
         created_at: Time.parse(row["created_at"]),
         id: row["event_id"],
         causation_id: row["causation_id"],
-        correlation_id: row["correlation_id"]
+        correlation_id: row["correlation_id"],
+        schema_version: version
       )
     end
 
