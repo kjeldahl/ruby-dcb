@@ -9,6 +9,7 @@ require_relative "dcb_event_store/store"
 require_relative "dcb_event_store/projection"
 require_relative "dcb_event_store/decision_model"
 require_relative "dcb_event_store/upcaster"
+require_relative "dcb_event_store/client"
 
 module DcbEventStore
 end
