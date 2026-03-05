@@ -36,11 +36,18 @@ module DcbEventStore
           check_condition!(condition)
         end
 
-        events.map do |event|
+        events.filter_map do |event|
           result = @conn.exec_params(
-            "INSERT INTO events (event_id, type, data, tags) VALUES ($1, $2, $3::jsonb, $4::text[]) RETURNING sequence_position, created_at",
+            <<~SQL,
+              INSERT INTO events (event_id, type, data, tags)
+              VALUES ($1, $2, $3::jsonb, $4::text[])
+              ON CONFLICT (event_id) DO NOTHING
+              RETURNING sequence_position, created_at
+            SQL
             [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}"]
           )
+          next nil if result.ntuples == 0
+
           row = result[0]
           SequencedEvent.new(
             sequence_position: row["sequence_position"].to_i,

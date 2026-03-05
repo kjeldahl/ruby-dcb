@@ -110,4 +110,33 @@ class TestStoreAppend < Minitest::Test
   def test_condition_not_met_is_rescuable
     assert DcbEventStore::ConditionNotMet < StandardError
   end
+
+  def test_duplicate_event_id_silently_skipped
+    id = SecureRandom.uuid
+    e1 = DcbEventStore::Event.new(type: "A", id: id)
+    e2 = DcbEventStore::Event.new(type: "A", id: id)
+
+    r1 = @store.append([e1])
+    assert_equal 1, r1.size
+
+    r2 = @store.append([e2])
+    assert_equal 0, r2.size
+
+    all = @store.read(DcbEventStore::Query.all).to_a
+    assert_equal 1, all.size
+  end
+
+  def test_idempotent_with_condition
+    id = SecureRandom.uuid
+    e = DcbEventStore::Event.new(type: "A", id: id, tags: ["t:1"])
+
+    query = DcbEventStore::Query.new([
+      DcbEventStore::QueryItem.new(event_types: ["Other"])
+    ])
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+
+    @store.append([e], condition)
+    r2 = @store.append([e], condition)
+    assert_equal 0, r2.size
+  end
 end
