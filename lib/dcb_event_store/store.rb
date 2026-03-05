@@ -27,6 +27,23 @@ module DcbEventStore
       end
     end
 
+    def read_from(query, after:)
+      sql, params = build_read_sql(query, after: after)
+
+      Enumerator.new do |yielder|
+        offset = 0
+        loop do
+          paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
+          result = @conn.exec_params(paginated, params)
+          break if result.ntuples == 0
+
+          result.each { |row| yielder << row_to_sequenced_event(row) }
+          break if result.ntuples < BATCH_SIZE
+          offset += BATCH_SIZE
+        end
+      end
+    end
+
     def append(events, condition = nil)
       events = Array(events)
       with_transaction do
@@ -66,9 +83,13 @@ module DcbEventStore
 
     private
 
-    def build_read_sql(query)
+    def build_read_sql(query, after: nil)
       if query.match_all?
-        return ["SELECT * FROM events ORDER BY sequence_position ASC", []]
+        if after
+          return ["SELECT * FROM events WHERE sequence_position > $1 ORDER BY sequence_position ASC", [after]]
+        else
+          return ["SELECT * FROM events ORDER BY sequence_position ASC", []]
+        end
       end
 
       clauses = []
@@ -90,7 +111,14 @@ module DcbEventStore
         clauses << "(#{parts.join(" AND ")})" unless parts.empty?
       end
 
-      sql = "SELECT * FROM events WHERE #{clauses.join(" OR ")} ORDER BY sequence_position ASC"
+      where = clauses.join(" OR ")
+
+      if after
+        params << after
+        where = "(#{where}) AND sequence_position > $#{params.size}"
+      end
+
+      sql = "SELECT * FROM events WHERE #{where} ORDER BY sequence_position ASC"
       [sql, params]
     end
 
