@@ -7,6 +7,7 @@ module DatabaseHelper
 
   def setup_db
     @conn = DatabaseHelper.connection
+    @conn.exec("SET client_min_messages TO warning")
     DcbEventStore::Schema.create!(@conn)
     @conn.exec("TRUNCATE events RESTART IDENTITY")
     @store = DcbEventStore::Store.new(@conn)
