@@ -1,4 +1,5 @@
 require "json"
+require "time"
 
 module DcbEventStore
   class Store
@@ -66,12 +67,12 @@ module DcbEventStore
         parts = []
 
         unless item.event_types.empty?
-          params << item.event_types
-          parts << "type = ANY($#{params.size})"
+          params << to_pg_array(item.event_types)
+          parts << "type = ANY($#{params.size}::text[])"
         end
 
         unless item.tags.empty?
-          params << item.tags
+          params << to_pg_array(item.tags)
           parts << "tags @> $#{params.size}::text[]"
         end
 
@@ -95,6 +96,10 @@ module DcbEventStore
     def parse_pg_array(str)
       return [] if str.nil? || str == "{}"
       str.delete_prefix("{").delete_suffix("}").split(",").map { |s| s.delete('"') }
+    end
+
+    def to_pg_array(arr)
+      "{#{arr.join(",")}}"
     end
 
     def check_condition!(condition)
@@ -121,12 +126,12 @@ module DcbEventStore
         parts = []
 
         unless item.event_types.empty?
-          params << item.event_types
-          parts << "type = ANY($#{params.size})"
+          params << to_pg_array(item.event_types)
+          parts << "type = ANY($#{params.size}::text[])"
         end
 
         unless item.tags.empty?
-          params << item.tags
+          params << to_pg_array(item.tags)
           parts << "tags @> $#{params.size}::text[]"
         end
 
