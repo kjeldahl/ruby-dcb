@@ -53,7 +53,7 @@ module DcbEventStore
           check_condition!(condition)
         end
 
-        events.filter_map do |event|
+        sequenced = events.filter_map do |event|
           result = @conn.exec_params(
             <<~SQL,
               INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id)
@@ -78,7 +78,37 @@ module DcbEventStore
             correlation_id: event.correlation_id
           )
         end
+
+        notify_position = sequenced.last&.sequence_position
+        if notify_position
+          @conn.exec("NOTIFY events_appended, '#{notify_position}'")
+        end
+
+        sequenced
       end
+    end
+
+    def subscribe(query, after: nil, &block)
+      last_pos = after
+
+      catch_up = after ? read_from(query, after: after) : read(query)
+      catch_up.each do |event|
+        last_pos = event.sequence_position
+        block.call(event)
+      end
+
+      @conn.exec("LISTEN events_appended")
+      loop do
+        @conn.wait_for_notify do |_channel, _pid, _payload|
+          new_events = read_from(query, after: last_pos || 0)
+          new_events.each do |event|
+            last_pos = event.sequence_position
+            block.call(event)
+          end
+        end
+      end
+    ensure
+      @conn.exec("UNLISTEN events_appended") rescue nil
     end
 
     private
