@@ -43,7 +43,8 @@ class TestProjection < Minitest::Test
   def make_event(sequence_position:, type:, data: {}, tags: [])
     DcbEventStore::SequencedEvent.new(
       sequence_position: sequence_position, type: type, data: data, tags: tags,
-      created_at: Time.now, id: SecureRandom.uuid
+      created_at: Time.now, id: SecureRandom.uuid,
+      causation_id: nil, correlation_id: nil
     )
   end
 

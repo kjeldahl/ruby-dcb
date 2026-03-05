@@ -7,6 +7,8 @@ class TestEvent < Minitest::Test
     assert_equal({}, e.data)
     assert_equal [], e.tags
     refute_nil e.id
+    assert_nil e.causation_id
+    assert_nil e.correlation_id
   end
 
   def test_coerces_type_to_string
@@ -40,5 +42,11 @@ class TestEvent < Minitest::Test
   def test_custom_id
     e = DcbEventStore::Event.new(type: "Foo", id: "custom-id")
     assert_equal "custom-id", e.id
+  end
+
+  def test_causation_and_correlation
+    e = DcbEventStore::Event.new(type: "Foo", causation_id: "c1", correlation_id: "r1")
+    assert_equal "c1", e.causation_id
+    assert_equal "r1", e.correlation_id
   end
 end

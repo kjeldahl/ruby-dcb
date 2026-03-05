@@ -39,12 +39,13 @@ module DcbEventStore
         events.filter_map do |event|
           result = @conn.exec_params(
             <<~SQL,
-              INSERT INTO events (event_id, type, data, tags)
-              VALUES ($1, $2, $3::jsonb, $4::text[])
+              INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id)
+              VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6)
               ON CONFLICT (event_id) DO NOTHING
               RETURNING sequence_position, created_at
             SQL
-            [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}"]
+            [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
+             event.causation_id, event.correlation_id]
           )
           next nil if result.ntuples == 0
 
@@ -55,7 +56,9 @@ module DcbEventStore
             data: event.data,
             tags: event.tags,
             created_at: Time.parse(row["created_at"]),
-            id: event.id
+            id: event.id,
+            causation_id: event.causation_id,
+            correlation_id: event.correlation_id
           )
         end
       end
@@ -98,7 +101,9 @@ module DcbEventStore
         data: JSON.parse(row["data"], symbolize_names: true),
         tags: parse_pg_array(row["tags"]),
         created_at: Time.parse(row["created_at"]),
-        id: row["event_id"]
+        id: row["event_id"],
+        causation_id: row["causation_id"],
+        correlation_id: row["correlation_id"]
       )
     end
 
