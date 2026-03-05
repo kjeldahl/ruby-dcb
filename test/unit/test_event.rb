@@ -6,6 +6,7 @@ class TestEvent < Minitest::Test
     assert_equal "Foo", e.type
     assert_equal({}, e.data)
     assert_equal [], e.tags
+    refute_nil e.id
   end
 
   def test_coerces_type_to_string
@@ -24,8 +25,20 @@ class TestEvent < Minitest::Test
   end
 
   def test_structural_equality
-    a = DcbEventStore::Event.new(type: "Foo", data: {x: 1}, tags: ["a:1"])
-    b = DcbEventStore::Event.new(type: "Foo", data: {x: 1}, tags: ["a:1"])
+    id = SecureRandom.uuid
+    a = DcbEventStore::Event.new(type: "Foo", data: {x: 1}, tags: ["a:1"], id: id)
+    b = DcbEventStore::Event.new(type: "Foo", data: {x: 1}, tags: ["a:1"], id: id)
     assert_equal a, b
+  end
+
+  def test_each_event_gets_unique_id
+    a = DcbEventStore::Event.new(type: "Foo")
+    b = DcbEventStore::Event.new(type: "Foo")
+    refute_equal a.id, b.id
+  end
+
+  def test_custom_id
+    e = DcbEventStore::Event.new(type: "Foo", id: "custom-id")
+    assert_equal "custom-id", e.id
   end
 end

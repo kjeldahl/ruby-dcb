@@ -38,8 +38,8 @@ module DcbEventStore
 
         events.map do |event|
           result = @conn.exec_params(
-            "INSERT INTO events (type, data, tags) VALUES ($1, $2::jsonb, $3::text[]) RETURNING sequence_position, created_at",
-            [event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}"]
+            "INSERT INTO events (event_id, type, data, tags) VALUES ($1, $2, $3::jsonb, $4::text[]) RETURNING sequence_position, created_at",
+            [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}"]
           )
           row = result[0]
           SequencedEvent.new(
@@ -47,7 +47,8 @@ module DcbEventStore
             type: event.type,
             data: event.data,
             tags: event.tags,
-            created_at: Time.parse(row["created_at"])
+            created_at: Time.parse(row["created_at"]),
+            id: event.id
           )
         end
       end
@@ -89,7 +90,8 @@ module DcbEventStore
         type: row["type"],
         data: JSON.parse(row["data"], symbolize_names: true),
         tags: parse_pg_array(row["tags"]),
-        created_at: Time.parse(row["created_at"])
+        created_at: Time.parse(row["created_at"]),
+        id: row["event_id"]
       )
     end
 

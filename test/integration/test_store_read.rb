@@ -1,5 +1,6 @@
 require_relative "../test_helper"
 require_relative "../support/database"
+require "securerandom"
 
 class TestStoreRead < Minitest::Test
   include DatabaseHelper
@@ -98,13 +99,20 @@ class TestStoreRead < Minitest::Test
     assert_equal({x: 1}, event.data)
   end
 
+  def test_event_id_returned_on_read
+    event = @store.read(DcbEventStore::Query.all).to_a
+    insert_event(type: "A", data: "{}", tags: [])
+    event = @store.read(DcbEventStore::Query.all).first
+    refute_nil event.id
+  end
+
   private
 
   def insert_event(type:, data:, tags:)
     tags_literal = "{#{tags.join(",")}}"
     @conn.exec_params(
-      "INSERT INTO events (type, data, tags) VALUES ($1, $2::jsonb, $3::text[])",
-      [type, data, tags_literal]
+      "INSERT INTO events (event_id, type, data, tags) VALUES ($1, $2, $3::jsonb, $4::text[])",
+      [SecureRandom.uuid, type, data, tags_literal]
     )
   end
 end
