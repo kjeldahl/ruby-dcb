@@ -15,6 +15,17 @@ module DcbEventStore
       CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
       CREATE INDEX IF NOT EXISTS idx_events_tags ON events USING GIN (tags);
       CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events (correlation_id);
+
+      CREATE OR REPLACE FUNCTION prevent_event_mutation() RETURNS TRIGGER AS $$
+      BEGIN
+        RAISE EXCEPTION 'events table is append-only: % not allowed', TG_OP;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS enforce_append_only ON events;
+      CREATE TRIGGER enforce_append_only
+        BEFORE UPDATE OR DELETE ON events
+        FOR EACH ROW EXECUTE FUNCTION prevent_event_mutation();
     SQL
 
     DROP_SQL = "DROP TABLE IF EXISTS events CASCADE;"

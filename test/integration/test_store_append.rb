@@ -126,6 +126,20 @@ class TestStoreAppend < Minitest::Test
     assert_equal 1, all.size
   end
 
+  def test_update_raises
+    @store.append([DcbEventStore::Event.new(type: "A")])
+    assert_raises(PG::RaiseException) do
+      @conn.exec("UPDATE events SET type = 'B' WHERE sequence_position = 1")
+    end
+  end
+
+  def test_delete_raises
+    @store.append([DcbEventStore::Event.new(type: "A")])
+    assert_raises(PG::RaiseException) do
+      @conn.exec("DELETE FROM events WHERE sequence_position = 1")
+    end
+  end
+
   def test_idempotent_with_condition
     id = SecureRandom.uuid
     e = DcbEventStore::Event.new(type: "A", id: id, tags: ["t:1"])
