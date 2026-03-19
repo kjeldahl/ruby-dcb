@@ -61,4 +61,5 @@ test/
 - **Gem name**: `dcb_event_store`
 
 ## Steps
-See `step_01.md` through `step_10.md` for individual work units.
+- **Phase 1** (core): `step_01.md` through `step_10.md`
+- **Phase 2** (hardening + features): `step_11.md` through `step_17.md`
