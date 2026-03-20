@@ -1,5 +1,6 @@
 require "json"
 require "time"
+require "zlib"
 
 module DcbEventStore
   class Store
@@ -174,40 +175,19 @@ module DcbEventStore
       tags = condition.fail_if_events_match.items.flat_map(&:tags).uniq
       return [APPEND_LOCK_KEY] if tags.empty?
 
-      tags.map { |t| t.hash.abs % (2**62) }.sort
+      tags.map { |t| Zlib.crc32(t).abs }.sort
     end
 
     def append_with_condition(events, condition)
+      # Check condition once before inserting any events
+      check_condition!(condition)
+      append_without_condition(events)
+    end
+
+    def check_condition!(condition)
       cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
-
-      events.filter_map do |event|
-        insert_params = [event.id, event.type, JSON.generate(event.data),
-                         "{#{event.tags.join(',')}}",
-                         event.causation_id, event.correlation_id, 1]
-        offset = cond_params.size
-        result = @conn.exec_params(
-          <<~SQL,
-            WITH cond AS (#{cond_sql})
-            INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
-            SELECT $#{offset + 1}, $#{offset + 2}, $#{offset + 3}::jsonb, $#{offset + 4}::text[],
-                   $#{offset + 5}, $#{offset + 6}, $#{offset + 7}
-            WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
-            ON CONFLICT (event_id) DO NOTHING
-            RETURNING sequence_position, created_at
-          SQL
-          cond_params + insert_params
-        )
-
-        if result.ntuples.zero?
-          # Disambiguate: condition failure vs idempotent skip
-          check = @conn.exec_params(cond_sql, cond_params)
-          raise ConditionNotMet, "conflicting event(s)" if check[0]["count"].to_i.positive?
-
-          next nil
-        end
-
-        row_to_appended_event(event, result[0])
-      end
+      result = @conn.exec_params(cond_sql, cond_params)
+      raise ConditionNotMet, "#{result[0]['count'].to_i} conflicting event(s)" if result[0]["count"].to_i.positive?
     end
 
     def append_without_condition(events)

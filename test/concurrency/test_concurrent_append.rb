@@ -264,8 +264,9 @@ class TestConcurrentAppend < Minitest::Test
     assert_equal all_events.size, successes
   end
 
-  # Independent tags should not block each other — verify parallelism
-  def test_independent_tags_run_concurrently
+  # Independent tags should not block each other — all succeed concurrently.
+  # Parallelism is validated via benchmarks (experiments/), not timing assertions.
+  def test_independent_tags_all_succeed_concurrently
     n = 10
     barrier = Concurrent::CyclicBarrier.new(n)
     results = Concurrent::Array.new
@@ -283,14 +284,13 @@ class TestConcurrentAppend < Minitest::Test
         condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
         barrier.wait
-
-        t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         store.append(
           DcbEventStore::Event.new(type: "IndyEvent", tags: ["entity:e#{i}"]),
           condition
         )
-        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
-        results << elapsed
+        results << :success
+      rescue DcbEventStore::ConditionNotMet
+        results << :conflict
       ensure
         conn&.close
       end
@@ -298,14 +298,10 @@ class TestConcurrentAppend < Minitest::Test
 
     threads.each { |t| t.join(10) }
 
-    all_events = @store.read(DcbEventStore::Query.all).to_a
-    assert_equal n, all_events.size, "All independent appends should succeed"
+    assert_equal n, results.count(:success), "All independent-tag appends should succeed"
+    assert_equal 0, results.count(:conflict)
 
-    # With per-tag locks, these should run in parallel.
-    # Wall-clock should be much less than sum of individual times.
-    results.max # longest thread determines wall clock
-    results.sum
-    # If fully serial, wall ≈ sum. If parallel, wall << sum.
-    # Just assert all succeeded — parallelism is a performance property, not correctness.
+    all_events = @store.read(DcbEventStore::Query.all).to_a
+    assert_equal n, all_events.size
   end
 end
