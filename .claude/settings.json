@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.command // \"\"' | grep -qE '^git commit' && bundle exec rubocop lib/ test/ || true",
+            "command": "if jq -r '.tool_input.command // \"\"' | grep -qE '^git commit'; then bundle exec rubocop lib/ test/; fi",
             "timeout": 60,
             "statusMessage": "Running rubocop lint check..."
           }
