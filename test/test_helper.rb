@@ -18,10 +18,12 @@ SimpleCov.start do
   add_group "Schema", ["lib/dcb_event_store/schema.rb"]
 
   if ENV["CI"]
-    formatter SimpleCov::Formatter::MultiFormatter.new([
-      SimpleCov::Formatter::HTMLFormatter,
-      SimpleCov::Formatter::JSONFormatter
-    ])
+    formatter SimpleCov::Formatter::MultiFormatter.new(
+      [
+        SimpleCov::Formatter::HTMLFormatter,
+        SimpleCov::Formatter::JSONFormatter
+      ]
+    )
   end
 end
 
