@@ -38,6 +38,16 @@ GEM
     rainbow (3.1.1)
     rake (13.3.1)
     regexp_parser (2.11.3)
+    simplecov (0.22.0)
+      docile (~> 1.1)
+      simplecov-html (~> 0.11)
+      simplecov_json_formatter (~> 0.1)
+    simplecov-html (0.13.2)
+    simplecov-json (0.2.3)
+      json
+      simplecov
+    simplecov_json_formatter (0.1.4)
+    docile (1.4.1)
     rubocop (1.85.1)
       json (~> 2.3)
       language_server-protocol (~> 3.17.0.2)
@@ -73,6 +83,8 @@ DEPENDENCIES
   minitest (~> 5.0)
   rake (~> 13.0)
   rubocop (~> 1.0)
+  simplecov (~> 0.22)
+  simplecov-json (~> 0.2)
 
 CHECKSUMS
   addressable (2.8.9) sha256=cc154fcbe689711808a43601dee7b980238ce54368d23e127421753e46895485
@@ -80,6 +92,7 @@ CHECKSUMS
   bigdecimal (4.0.1) sha256=8b07d3d065a9f921c80ceaea7c9d4ae596697295b584c296fe599dd0ad01c4a7
   concurrent-ruby (1.3.6) sha256=6b56837e1e7e5292f9864f34b69c5a2cbc75c0cf5338f1ce9903d10fa762d5ab
   dcb_event_store (0.1.0)
+  docile (1.4.1) sha256=5f948e105a3750dbf4a8b1e3b53b11c69a543a47dcaa0d6af29e3ec8ebce87d1
   json (2.19.2) sha256=e7e1bd318b2c37c4ceee2444841c86539bc462e81f40d134cf97826cb14e83cf
   json-schema (6.2.0) sha256=e8bff46ed845a22c1ab2bd0d7eccf831c01fe23bb3920caa4c74db4306813666
   language_server-protocol (3.17.0.5) sha256=fd1e39a51a28bf3eec959379985a72e296e9f9acfce46f6a79d31ca8760803cc
@@ -101,6 +114,10 @@ CHECKSUMS
   rainbow (3.1.1) sha256=039491aa3a89f42efa1d6dec2fc4e62ede96eb6acd95e52f1ad581182b79bc6a
   rake (13.3.1) sha256=8c9e89d09f66a26a01264e7e3480ec0607f0c497a861ef16063604b1b08eb19c
   regexp_parser (2.11.3) sha256=ca13f381a173b7a93450e53459075c9b76a10433caadcb2f1180f2c741fc55a4
+  simplecov (0.22.0) sha256=5ea23ebc84a1e84e2e19a8a1bef081e27e7d28dfa7c6aefc5bbba3e6b0e03903
+  simplecov-html (0.13.2) sha256=42857079ef29c2a40e86561eff40a1b0230f3b64efc65a9ca01cbde31fa93ea1
+  simplecov-json (0.2.3) sha256=24b1a77e2d3fcf6c52f02204e55a3bbcd5e7a9b6e6b4e5cf2be8b12e8e684d0e
+  simplecov_json_formatter (0.1.4) sha256=529418fbe8de1713ac2b2d612e52d05cd88e1f80a3d38e9a3f4bdbfcab3e0293
   rubocop (1.85.1) sha256=3dbcf9e961baa4c376eeeb2a03913dca5e3987033b04d38fa538aa1e7406cc77
   rubocop-ast (1.49.1) sha256=4412f3ee70f6fe4546cc489548e0f6fcf76cafcfa80fa03af67098ffed755035
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33

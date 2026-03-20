@@ -41,3 +41,71 @@ jobs:
         run: ruby -e "require './lib/dcb_event_store'; puts DcbEventStore::VERSION"
       - name: Run tests
         run: bundle exec rake
+      - name: Upload coverage report
+        if: always() && matrix.ruby-version == '3.4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ github.sha }}
+          path: coverage/
+          retention-days: 30
+
+  coverage-report:
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download PR coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report-${{ github.sha }}
+          path: coverage-pr/
+
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb dcb_event_store_test
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Generate base branch coverage
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          git checkout origin/${{ github.base_ref }}
+          bundle install
+          bundle exec rake || true
+          cp coverage/.resultset.json /tmp/base_coverage.json || true
+
+      - name: Checkout back to PR
+        run: git checkout ${{ github.sha }}
+
+      - name: Generate coverage change report
+        run: |
+          if [ -f /tmp/base_coverage.json ] && [ -f coverage-pr/.resultset.json ]; then
+            ruby scripts/coverage_report.rb /tmp/base_coverage.json coverage-pr/.resultset.json > coverage_summary.md
+          else
+            ruby scripts/coverage_report.rb coverage-pr/.resultset.json > coverage_summary.md
+          fi
+          cat coverage_summary.md
+
+      - name: Comment on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          path: coverage_summary.md
+
+      - name: Upload coverage summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage_summary.md
+          retention-days: 30
