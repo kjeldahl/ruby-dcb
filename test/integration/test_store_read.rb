@@ -102,6 +102,35 @@ class TestStoreRead < Minitest::Test
     assert_equal({x: 1}, event.data)
   end
 
+  def test_read_filters_by_tag_only_no_event_types
+    insert_event(type: "A", data: "{}", tags: ["tenant:t1"])
+    insert_event(type: "B", data: "{}", tags: ["tenant:t1"])
+    insert_event(type: "C", data: "{}", tags: ["tenant:t2"])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: [], tags: ["tenant:t1"])
+                                     ])
+    events = @store.read(query).to_a
+    assert_equal 2, events.size
+    assert(events.all? { |e| e.tags.include?("tenant:t1") })
+  end
+
+  def test_read_from_with_type_and_tag_filter_after_position
+    insert_event(type: "A", data: "{}", tags: ["course:c1"])
+    insert_event(type: "A", data: "{}", tags: ["course:c2"])
+    insert_event(type: "B", data: "{}", tags: ["course:c1"])
+    insert_event(type: "A", data: "{}", tags: ["course:c1"])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["course:c1"])
+                                     ])
+    events = @store.read_from(query, after: 2).to_a
+    assert_equal 1, events.size
+    assert_equal "A", events[0].type
+    assert_equal ["course:c1"], events[0].tags
+    assert events[0].sequence_position > 2
+  end
+
   def test_event_id_returned_on_read
     @store.read(DcbEventStore::Query.all).to_a
     insert_event(type: "A", data: "{}", tags: [])

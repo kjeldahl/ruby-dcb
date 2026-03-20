@@ -140,6 +140,64 @@ class TestStoreAppend < Minitest::Test
     end
   end
 
+  def test_condition_match_all_no_after
+    @store.append([DcbEventStore::Event.new(type: "A")])
+
+    condition = DcbEventStore::AppendCondition.new(
+      fail_if_events_match: DcbEventStore::Query.all
+    )
+
+    assert_raises(DcbEventStore::ConditionNotMet) do
+      @store.append([DcbEventStore::Event.new(type: "B")], condition)
+    end
+  end
+
+  def test_condition_match_all_with_after
+    first = @store.append([DcbEventStore::Event.new(type: "A")])
+
+    condition = DcbEventStore::AppendCondition.new(
+      fail_if_events_match: DcbEventStore::Query.all,
+      after: first[0].sequence_position
+    )
+
+    # No events after position 1, so condition passes
+    result = @store.append([DcbEventStore::Event.new(type: "B")], condition)
+    assert_equal 1, result.size
+  end
+
+  def test_condition_with_tag_filter_no_event_types
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["tenant:t1"])])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: [], tags: ["tenant:t1"])
+                                     ])
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+
+    assert_raises(DcbEventStore::ConditionNotMet) do
+      @store.append([DcbEventStore::Event.new(type: "B")], condition)
+    end
+  end
+
+  def test_mixed_batch_some_duplicates
+    id1 = SecureRandom.uuid
+    e1 = DcbEventStore::Event.new(type: "A", id: id1)
+    @store.append([e1])
+
+    id2 = SecureRandom.uuid
+    batch = [
+      DcbEventStore::Event.new(type: "A", id: id1),
+      DcbEventStore::Event.new(type: "B", id: id2)
+    ]
+    result = @store.append(batch)
+
+    assert_equal 1, result.size
+    assert_equal "B", result[0].type
+    assert_equal id2, result[0].id
+
+    all = @store.read(DcbEventStore::Query.all).to_a
+    assert_equal 2, all.size
+  end
+
   def test_idempotent_with_condition
     id = SecureRandom.uuid
     e = DcbEventStore::Event.new(type: "A", id: id, tags: ["t:1"])

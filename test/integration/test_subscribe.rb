@@ -87,4 +87,25 @@ class TestSubscribe < Minitest::Test
     assert_equal 1, received.size
     assert_equal "Wanted", received[0].type
   end
+
+  def test_subscribe_unlisten_on_block_raise
+    conn = DatabaseHelper.connection
+    store = DcbEventStore::Store.new(conn)
+
+    # Need an event so catch-up yields and triggers the raise
+    @store.append([DcbEventStore::Event.new(type: "Trigger")])
+
+    assert_raises(RuntimeError) do
+      store.subscribe(DcbEventStore::Query.all, after: 0) do |_event|
+        raise "boom"
+      end
+    end
+
+    # UNLISTEN should have run in ensure block.
+    # Verify conn is still usable (not in broken state from leaked LISTEN).
+    result = conn.exec("SELECT 1 AS ok")
+    assert_equal "1", result[0]["ok"]
+  ensure
+    conn&.close
+  end
 end
