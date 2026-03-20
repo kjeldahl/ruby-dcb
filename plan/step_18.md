@@ -1,11 +1,10 @@
-# Step 18: Multi-tag Advisory Locks + CTE Append
+# Step 18: Multi-tag Advisory Locks
 
 ## Goal
 
-Replace the global advisory lock with per-tag advisory locks and merge
-the condition check + insert into a single CTE statement. Validated by
-experiments (see `experiments/JOURNAL.md`): 4.7-14.4x concurrent latency
-improvement, up to 3.1x throughput gain, no regressions.
+Replace the global advisory lock with per-tag advisory locks. Validated
+by experiments (see `experiments/JOURNAL.md`): 4.7-14.4x concurrent
+latency improvement, up to 3.1x throughput gain, no regressions.
 
 ## Changes
 
@@ -45,34 +44,33 @@ pg_arr = "{#{lock_keys.join(",")}}"
 
 New private method `condition_lock_keys(condition)`:
 - Extract all unique tags from `condition.fail_if_events_match.items`
-- Hash each tag to a bigint: `tag.hash.abs % (2**62)`
+- Hash each tag to a bigint: `Zlib.crc32(tag)` (deterministic across processes)
 - Sort, return array
 - If no tags (type-only query) or no condition: return `[0]` (global lock)
 
-### 3. Store#append: CTE condition+insert
+### 3. Store#append: check condition once, then insert
 
-When condition is present, replace the separate `check_condition!` call
-and `INSERT` with a single CTE statement:
+The condition check runs once before inserting all events. This preserves
+correct multi-event batch semantics (all-or-nothing per the DCB spec).
+
+**CTE alternative (not implemented):** A single-statement CTE could
+merge the condition check and multi-row INSERT into one round-trip:
 
 ```sql
 WITH cond AS (SELECT COUNT(*) FROM events WHERE ...)
-INSERT INTO events (...) SELECT $1, $2, ...
+INSERT INTO events (event_id, type, data, tags, ...)
+SELECT * FROM (VALUES ($1,$2,...), ($8,$9,...)) AS v(...)
 WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
 ON CONFLICT (event_id) DO NOTHING
 RETURNING sequence_position, created_at
 ```
 
-When CTE returns 0 rows: could be condition failure OR idempotent skip.
-Disambiguate by running the condition COUNT query — if positive, raise
-`ConditionNotMet`; if zero, it was an idempotent skip (return nil).
-
-When no condition: use plain INSERT (unchanged).
-
-### 4. Remove `check_condition!` and `build_condition_sql` separation
-
-`build_condition_sql` stays (used by both CTE and disambiguation).
-`check_condition!` is no longer called directly — remove it.
-Keep `APPEND_LOCK_KEY = 0` as the fallback constant.
+This saves one round-trip (~0.4ms) but adds complexity: parameter
+numbering scales with event count, and disambiguating partial RETURNING
+results (condition failure vs idempotent skip when fewer rows return
+than events passed) requires a fallback COUNT query. A per-event CTE
+loop is **incorrect** — it re-checks the condition after each insert,
+causing false `ConditionNotMet` on the second event in a batch.
 
 ## Tests
 
@@ -98,7 +96,7 @@ Add to `test/concurrency/test_concurrent_append.rb`:
 ## Files Changed
 
 - `lib/dcb_event_store/schema.rb` — add stored procedure to CREATE_SQL
-- `lib/dcb_event_store/store.rb` — rewrite append locking + CTE
+- `lib/dcb_event_store/store.rb` — per-tag locking, refactored append
 - `test/concurrency/test_concurrent_append.rb` — add 2 new tests
 
 ## Done When
