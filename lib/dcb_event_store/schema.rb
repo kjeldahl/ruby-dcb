@@ -17,6 +17,17 @@ module DcbEventStore
       CREATE INDEX IF NOT EXISTS idx_events_tags ON events USING GIN (tags);
       CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events (correlation_id);
 
+      CREATE OR REPLACE FUNCTION acquire_sorted_advisory_locks(lock_keys bigint[])
+      RETURNS void AS $$
+      DECLARE k bigint;
+      BEGIN
+        FOREACH k IN ARRAY (SELECT array_agg(x ORDER BY x) FROM unnest(lock_keys) x)
+        LOOP
+          PERFORM pg_advisory_xact_lock(k);
+        END LOOP;
+      END;
+      $$ LANGUAGE plpgsql;
+
       CREATE OR REPLACE FUNCTION prevent_event_mutation() RETURNS TRIGGER AS $$
       BEGIN
         RAISE EXCEPTION 'events table is append-only: % not allowed', TG_OP;

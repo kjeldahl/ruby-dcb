@@ -179,4 +179,129 @@ class TestConcurrentAppend < Minitest::Test
     positions = all_events.map(&:sequence_position)
     assert_equal positions.uniq, positions, "Positions must be unique"
   end
+
+  # Cross-boundary: same student subscribes to different courses concurrently.
+  # Student limit is 5 — exactly 5 should succeed even though each append
+  # targets a different course tag.
+  def test_cross_boundary_concurrent_safety
+    max_courses = 5
+    n = 10
+    barrier = Concurrent::CyclicBarrier.new(n)
+    results = Concurrent::Array.new
+
+    # Seed courses
+    n.times do |i|
+      @store.append(DcbEventStore::Event.new(
+                      type: "CourseDefined",
+                      data: {course_id: "c#{i}", capacity: 100},
+                      tags: ["course:c#{i}"]
+                    ))
+    end
+
+    threads = n.times.map do |i|
+      Thread.new do
+        conn = DatabaseHelper.connection
+        conn.exec("SET client_min_messages TO warning")
+        store = DcbEventStore::Store.new(conn)
+
+        # Build decision model: check student subscription count + course existence
+        student_subs = DcbEventStore::Projection.new(
+          initial_state: 0,
+          handlers: {"StudentSubscribed" => ->(s, _e) { s + 1 }},
+          query: DcbEventStore::Query.new([
+                                            DcbEventStore::QueryItem.new(event_types: ["StudentSubscribed"],
+                                                                         tags: ["student:s1"])
+                                          ])
+        )
+        course_subs = DcbEventStore::Projection.new(
+          initial_state: 0,
+          handlers: {"StudentSubscribed" => ->(s, _e) { s + 1 }},
+          query: DcbEventStore::Query.new([
+                                            DcbEventStore::QueryItem.new(event_types: ["StudentSubscribed"],
+                                                                         tags: ["course:c#{i}"])
+                                          ])
+        )
+
+        barrier.wait
+
+        result = DcbEventStore::DecisionModel.build(store,
+                                                    student_subs: student_subs, course_subs: course_subs)
+
+        if result.states[:student_subs] >= max_courses
+          results << :limit
+          next
+        end
+
+        begin
+          store.append(
+            DcbEventStore::Event.new(
+              type: "StudentSubscribed",
+              data: {student_id: "s1", course_id: "c#{i}"},
+              tags: ["student:s1", "course:c#{i}"]
+            ),
+            result.append_condition
+          )
+          results << :success
+        rescue DcbEventStore::ConditionNotMet
+          results << :conflict
+        end
+      ensure
+        conn&.close
+      end
+    end
+
+    threads.each { |t| t.join(10) }
+
+    successes = results.count(:success)
+    all_events = @store.read(DcbEventStore::Query.new([
+                                                        DcbEventStore::QueryItem.new(
+                                                          event_types: ["StudentSubscribed"], tags: ["student:s1"]
+                                                        )
+                                                      ])).to_a
+
+    assert all_events.size <= max_courses,
+           "Student should have at most #{max_courses} subscriptions, got #{all_events.size}"
+    assert_equal all_events.size, successes
+  end
+
+  # Independent tags should not block each other — all succeed concurrently.
+  # Parallelism is validated via benchmarks (experiments/), not timing assertions.
+  def test_independent_tags_all_succeed_concurrently
+    n = 10
+    barrier = Concurrent::CyclicBarrier.new(n)
+    results = Concurrent::Array.new
+
+    threads = n.times.map do |i|
+      Thread.new do
+        conn = DatabaseHelper.connection
+        conn.exec("SET client_min_messages TO warning")
+        store = DcbEventStore::Store.new(conn)
+
+        query = DcbEventStore::Query.new([
+                                           DcbEventStore::QueryItem.new(event_types: ["IndyEvent"],
+                                                                        tags: ["entity:e#{i}"])
+                                         ])
+        condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+
+        barrier.wait
+        store.append(
+          DcbEventStore::Event.new(type: "IndyEvent", tags: ["entity:e#{i}"]),
+          condition
+        )
+        results << :success
+      rescue DcbEventStore::ConditionNotMet
+        results << :conflict
+      ensure
+        conn&.close
+      end
+    end
+
+    threads.each { |t| t.join(10) }
+
+    assert_equal n, results.count(:success), "All independent-tag appends should succeed"
+    assert_equal 0, results.count(:conflict)
+
+    all_events = @store.read(DcbEventStore::Query.all).to_a
+    assert_equal n, all_events.size
+  end
 end

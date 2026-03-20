@@ -1,5 +1,6 @@
 require "json"
 require "time"
+require "zlib"
 
 module DcbEventStore
   class Store
@@ -50,36 +51,13 @@ module DcbEventStore
     def append(events, condition = nil)
       events = Array(events)
       with_transaction do
-        @conn.exec("SELECT pg_advisory_xact_lock($1)", [APPEND_LOCK_KEY])
+        acquire_locks!(condition)
 
-        check_condition!(condition) if condition
-
-        sequenced = events.filter_map do |event|
-          result = @conn.exec_params(
-            <<~SQL,
-              INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
-              VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
-              ON CONFLICT (event_id) DO NOTHING
-              RETURNING sequence_position, created_at
-            SQL
-            [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(',')}}",
-             event.causation_id, event.correlation_id, 1]
-          )
-          next nil if result.ntuples.zero?
-
-          row = result[0]
-          SequencedEvent.new(
-            sequence_position: row["sequence_position"].to_i,
-            type: event.type,
-            data: event.data,
-            tags: event.tags,
-            created_at: Time.parse(row["created_at"]),
-            id: event.id,
-            causation_id: event.causation_id,
-            correlation_id: event.correlation_id,
-            schema_version: 1
-          )
-        end
+        sequenced = if condition
+                      append_with_condition(events, condition)
+                    else
+                      append_without_condition(events)
+                    end
 
         notify_position = sequenced.last&.sequence_position
         @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
@@ -185,12 +163,63 @@ module DcbEventStore
       "{#{arr.join(',')}}"
     end
 
+    def acquire_locks!(condition)
+      keys = condition_lock_keys(condition)
+      pg_arr = "{#{keys.join(',')}}"
+      @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [pg_arr])
+    end
+
+    def condition_lock_keys(condition)
+      return [APPEND_LOCK_KEY] unless condition
+
+      tags = condition.fail_if_events_match.items.flat_map(&:tags).uniq
+      return [APPEND_LOCK_KEY] if tags.empty?
+
+      tags.map { |t| Zlib.crc32(t).abs }.sort
+    end
+
+    def append_with_condition(events, condition)
+      # Check condition once before inserting any events
+      check_condition!(condition)
+      append_without_condition(events)
+    end
+
     def check_condition!(condition)
-      query = condition.fail_if_events_match
-      sql, params = build_condition_sql(query, condition.after)
-      result = @conn.exec_params(sql, params)
-      count = result[0]["count"].to_i
-      raise ConditionNotMet, "#{count} conflicting event(s)" if count.positive?
+      cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
+      result = @conn.exec_params(cond_sql, cond_params)
+      raise ConditionNotMet, "#{result[0]['count'].to_i} conflicting event(s)" if result[0]["count"].to_i.positive?
+    end
+
+    def append_without_condition(events)
+      events.filter_map do |event|
+        result = @conn.exec_params(
+          <<~SQL,
+            INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+            VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
+            ON CONFLICT (event_id) DO NOTHING
+            RETURNING sequence_position, created_at
+          SQL
+          [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(',')}}",
+           event.causation_id, event.correlation_id, 1]
+        )
+        next nil if result.ntuples.zero?
+
+        row_to_appended_event(event, result[0])
+      end
+    end
+
+    def row_to_appended_event(event, row)
+      SequencedEvent.new(
+        sequence_position: row["sequence_position"].to_i,
+        type: event.type,
+        data: event.data,
+        tags: event.tags,
+        created_at: Time.parse(row["created_at"]),
+        id: event.id,
+        causation_id: event.causation_id,
+        correlation_id: event.correlation_id,
+        schema_version: 1
+      )
     end
 
     def build_condition_sql(query, after)
