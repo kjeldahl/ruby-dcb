@@ -32,8 +32,8 @@ class TestStoreRead < Minitest::Test
     insert_event(type: "B", data: "{}", tags: [])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["A"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["A"])
+                                     ])
     events = @store.read(query).to_a
     assert_equal 1, events.size
     assert_equal "A", events[0].type
@@ -44,8 +44,8 @@ class TestStoreRead < Minitest::Test
     insert_event(type: "A", data: "{}", tags: ["course:c2"])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["course:c1"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["course:c1"])
+                                     ])
     events = @store.read(query).to_a
     assert_equal 1, events.size
     assert_equal ["course:c1"], events[0].tags
@@ -56,8 +56,11 @@ class TestStoreRead < Minitest::Test
     insert_event(type: "A", data: "{}", tags: ["student:s1"])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["student:s1", "course:c1"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["A"],
+                                                                    tags: [
+                                                                      "student:s1", "course:c1"
+                                                                    ])
+                                     ])
     events = @store.read(query).to_a
     assert_equal 1, events.size
     assert_equal ["student:s1", "course:c1"], events[0].tags
@@ -69,9 +72,9 @@ class TestStoreRead < Minitest::Test
     insert_event(type: "C", data: "{}", tags: ["z:3"])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["A"]),
-      DcbEventStore::QueryItem.new(event_types: ["B"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["A"]),
+                                       DcbEventStore::QueryItem.new(event_types: ["B"])
+                                     ])
     events = @store.read(query).to_a
     assert_equal 2, events.size
     assert_equal %w[A B], events.map(&:type)
@@ -100,7 +103,7 @@ class TestStoreRead < Minitest::Test
   end
 
   def test_event_id_returned_on_read
-    event = @store.read(DcbEventStore::Query.all).to_a
+    @store.read(DcbEventStore::Query.all).to_a
     insert_event(type: "A", data: "{}", tags: [])
     event = @store.read(DcbEventStore::Query.all).first
     refute_nil event.id
@@ -109,7 +112,7 @@ class TestStoreRead < Minitest::Test
   private
 
   def insert_event(type:, data:, tags:)
-    tags_literal = "{#{tags.join(",")}}"
+    tags_literal = "{#{tags.join(',')}}"
     @conn.exec_params(
       "INSERT INTO events (event_id, type, data, tags) VALUES ($1, $2, $3::jsonb, $4::text[])",
       [SecureRandom.uuid, type, data, tags_literal]

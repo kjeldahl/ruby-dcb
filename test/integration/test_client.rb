@@ -48,8 +48,8 @@ class TestClientIntegration < Minitest::Test
 
   def test_works_with_decision_model_conditions
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["SeatReserved"], tags: ["seat:A1"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["SeatReserved"], tags: ["seat:A1"])
+                                     ])
 
     ctx = DcbEventStore::Client.new(@store, correlation_id: @corr_id)
     ctx.append(DcbEventStore::Event.new(type: "SeatReserved", tags: ["seat:A1"]))

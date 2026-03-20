@@ -37,8 +37,8 @@ class TestStoreAppend < Minitest::Test
 
   def test_append_condition_passes
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Conflict"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["Conflict"])
+                                     ])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
     event = DcbEventStore::Event.new(type: "Safe")
@@ -50,8 +50,8 @@ class TestStoreAppend < Minitest::Test
     @store.append([DcbEventStore::Event.new(type: "Conflict")])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Conflict"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["Conflict"])
+                                     ])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
     assert_raises(DcbEventStore::ConditionNotMet) do
@@ -63,8 +63,8 @@ class TestStoreAppend < Minitest::Test
     first = @store.append([DcbEventStore::Event.new(type: "Conflict")])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Conflict"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["Conflict"])
+                                     ])
     condition = DcbEventStore::AppendCondition.new(
       fail_if_events_match: query,
       after: first[0].sequence_position
@@ -79,8 +79,8 @@ class TestStoreAppend < Minitest::Test
     @store.append([DcbEventStore::Event.new(type: "Conflict")])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Conflict"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["Conflict"])
+                                     ])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query, after: nil)
 
     assert_raises(DcbEventStore::ConditionNotMet) do
@@ -92,8 +92,8 @@ class TestStoreAppend < Minitest::Test
     @store.append([DcbEventStore::Event.new(type: "Existing", tags: ["t:1"])])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Existing"], tags: ["t:1"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["Existing"], tags: ["t:1"])
+                                     ])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
     begin
@@ -145,8 +145,8 @@ class TestStoreAppend < Minitest::Test
     e = DcbEventStore::Event.new(type: "A", id: id, tags: ["t:1"])
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Other"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["Other"])
+                                     ])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
     @store.append([e], condition)

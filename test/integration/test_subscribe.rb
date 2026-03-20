@@ -68,8 +68,8 @@ class TestSubscribe < Minitest::Test
       conn = DatabaseHelper.connection
       store = DcbEventStore::Store.new(conn)
       query = DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Wanted"])
-      ])
+                                         DcbEventStore::QueryItem.new(event_types: ["Wanted"])
+                                       ])
       store.subscribe(query, after: 0) do |event|
         received << event
         break if received.size >= 1

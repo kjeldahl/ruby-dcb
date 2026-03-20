@@ -24,8 +24,9 @@ class TestConcurrentAppend < Minitest::Test
         store = DcbEventStore::Store.new(conn)
 
         query = DcbEventStore::Query.new([
-          DcbEventStore::QueryItem.new(event_types: ["SeatReserved"], tags: ["course:c1"])
-        ])
+                                           DcbEventStore::QueryItem.new(event_types: ["SeatReserved"],
+                                                                        tags: ["course:c1"])
+                                         ])
         condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
         barrier.wait
@@ -64,8 +65,9 @@ class TestConcurrentAppend < Minitest::Test
         store = DcbEventStore::Store.new(conn)
 
         query = DcbEventStore::Query.new([
-          DcbEventStore::QueryItem.new(event_types: ["Reserved"], tags: ["course:c#{i}"])
-        ])
+                                           DcbEventStore::QueryItem.new(event_types: ["Reserved"],
+                                                                        tags: ["course:c#{i}"])
+                                         ])
         condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
         barrier.wait
@@ -109,8 +111,8 @@ class TestConcurrentAppend < Minitest::Test
           max_pos = events.map(&:sequence_position).max
 
           query = DcbEventStore::Query.new([
-            DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["x:1"])
-          ])
+                                             DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["x:1"])
+                                           ])
           condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query, after: max_pos)
 
           begin
@@ -142,14 +144,14 @@ class TestConcurrentAppend < Minitest::Test
     barrier = Concurrent::CyclicBarrier.new(n)
     success_count = Concurrent::AtomicFixnum.new(0)
 
-    threads = n.times.map do |i|
+    threads = n.times.map do |_i|
       Thread.new do
         conn = DatabaseHelper.connection
         store = DcbEventStore::Store.new(conn)
 
         query = DcbEventStore::Query.new([
-          DcbEventStore::QueryItem.new(event_types: ["Race"], tags: ["shared:1"])
-        ])
+                                           DcbEventStore::QueryItem.new(event_types: ["Race"], tags: ["shared:1"])
+                                         ])
         condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
 
         barrier.wait

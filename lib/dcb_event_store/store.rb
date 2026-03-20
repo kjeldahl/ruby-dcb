@@ -19,10 +19,11 @@ module DcbEventStore
         loop do
           paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
           result = @conn.exec_params(paginated, params)
-          break if result.ntuples == 0
+          break if result.ntuples.zero?
 
           result.each { |row| yielder << row_to_sequenced_event(row) }
           break if result.ntuples < BATCH_SIZE
+
           offset += BATCH_SIZE
         end
       end
@@ -36,10 +37,11 @@ module DcbEventStore
         loop do
           paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
           result = @conn.exec_params(paginated, params)
-          break if result.ntuples == 0
+          break if result.ntuples.zero?
 
           result.each { |row| yielder << row_to_sequenced_event(row) }
           break if result.ntuples < BATCH_SIZE
+
           offset += BATCH_SIZE
         end
       end
@@ -50,9 +52,7 @@ module DcbEventStore
       with_transaction do
         @conn.exec("SELECT pg_advisory_xact_lock($1)", [APPEND_LOCK_KEY])
 
-        if condition
-          check_condition!(condition)
-        end
+        check_condition!(condition) if condition
 
         sequenced = events.filter_map do |event|
           result = @conn.exec_params(
@@ -62,10 +62,10 @@ module DcbEventStore
               ON CONFLICT (event_id) DO NOTHING
               RETURNING sequence_position, created_at
             SQL
-            [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
+            [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(',')}}",
              event.causation_id, event.correlation_id, 1]
           )
-          next nil if result.ntuples == 0
+          next nil if result.ntuples.zero?
 
           row = result[0]
           SequencedEvent.new(
@@ -82,9 +82,7 @@ module DcbEventStore
         end
 
         notify_position = sequenced.last&.sequence_position
-        if notify_position
-          @conn.exec("NOTIFY events_appended, '#{notify_position}'")
-        end
+        @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
 
         sequenced
       end
@@ -110,18 +108,21 @@ module DcbEventStore
         end
       end
     ensure
-      @conn.exec("UNLISTEN events_appended") rescue nil
+      begin
+        @conn.exec("UNLISTEN events_appended")
+      rescue StandardError
+        nil
+      end
     end
 
     private
 
     def build_read_sql(query, after: nil)
       if query.match_all?
-        if after
-          return ["SELECT * FROM events WHERE sequence_position > $1 ORDER BY sequence_position ASC", [after]]
-        else
-          return ["SELECT * FROM events ORDER BY sequence_position ASC", []]
-        end
+        return ["SELECT * FROM events WHERE sequence_position > $1 ORDER BY sequence_position ASC", [after]] if after
+
+        return ["SELECT * FROM events ORDER BY sequence_position ASC", []]
+
       end
 
       clauses = []
@@ -140,7 +141,7 @@ module DcbEventStore
           parts << "tags @> $#{params.size}::text[]"
         end
 
-        clauses << "(#{parts.join(" AND ")})" unless parts.empty?
+        clauses << "(#{parts.join(' AND ')})" unless parts.empty?
       end
 
       where = clauses.join(" OR ")
@@ -159,9 +160,7 @@ module DcbEventStore
       data = JSON.parse(row["data"], symbolize_names: true)
       version = row["schema_version"].to_i
 
-      if @upcaster
-        data, version = @upcaster.upcast(type, data, version)
-      end
+      data, version = @upcaster.upcast(type, data, version) if @upcaster
 
       SequencedEvent.new(
         sequence_position: row["sequence_position"].to_i,
@@ -178,11 +177,12 @@ module DcbEventStore
 
     def parse_pg_array(str)
       return [] if str.nil? || str == "{}"
+
       str.delete_prefix("{").delete_suffix("}").split(",").map { |s| s.delete('"') }
     end
 
     def to_pg_array(arr)
-      "{#{arr.join(",")}}"
+      "{#{arr.join(',')}}"
     end
 
     def check_condition!(condition)
@@ -190,16 +190,15 @@ module DcbEventStore
       sql, params = build_condition_sql(query, condition.after)
       result = @conn.exec_params(sql, params)
       count = result[0]["count"].to_i
-      raise ConditionNotMet, "#{count} conflicting event(s)" if count > 0
+      raise ConditionNotMet, "#{count} conflicting event(s)" if count.positive?
     end
 
     def build_condition_sql(query, after)
       if query.match_all?
-        if after
-          return ["SELECT COUNT(*) FROM events WHERE sequence_position > $1", [after]]
-        else
-          return ["SELECT COUNT(*) FROM events", []]
-        end
+        return ["SELECT COUNT(*) FROM events WHERE sequence_position > $1", [after]] if after
+
+        return ["SELECT COUNT(*) FROM events", []]
+
       end
 
       clauses = []
@@ -218,7 +217,7 @@ module DcbEventStore
           parts << "tags @> $#{params.size}::text[]"
         end
 
-        clauses << "(#{parts.join(" AND ")})" unless parts.empty?
+        clauses << "(#{parts.join(' AND ')})" unless parts.empty?
       end
 
       where = clauses.join(" OR ")
@@ -236,8 +235,12 @@ module DcbEventStore
       result = yield
       @conn.exec("COMMIT")
       result
-    rescue => e
-      @conn.exec("ROLLBACK") rescue nil
+    rescue StandardError
+      begin
+        @conn.exec("ROLLBACK")
+      rescue StandardError
+        nil
+      end
       raise
     end
   end

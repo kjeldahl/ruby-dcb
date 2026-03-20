@@ -12,6 +12,7 @@ module DcbEventStore
       loop do
         transformer = @transformers[[type, version]]
         break unless transformer
+
         data = transformer.call(data)
         version += 1
       end

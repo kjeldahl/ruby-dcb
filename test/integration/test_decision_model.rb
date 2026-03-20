@@ -16,22 +16,20 @@ class TestDecisionModel < Minitest::Test
     @store.append([DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])])
 
     result = DcbEventStore::DecisionModel.build(@store,
-      count: counter_projection("counter:a")
-    )
+                                                count: counter_projection("counter:a"))
 
     assert_equal 1, result.states[:count]
   end
 
   def test_multiple_projections
     @store.append([
-      DcbEventStore::Event.new(type: "CourseDefined", data: {capacity: 5}, tags: ["course:c1"]),
-      DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["course:c1", "student:s1"])
-    ])
+                    DcbEventStore::Event.new(type: "CourseDefined", data: {capacity: 5}, tags: ["course:c1"]),
+                    DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["course:c1", "student:s1"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store,
-      capacity: capacity_projection("course:c1"),
-      subscriptions: subscription_count_projection("course:c1")
-    )
+                                                capacity: capacity_projection("course:c1"),
+                                                subscriptions: subscription_count_projection("course:c1"))
 
     assert_equal 5, result.states[:capacity]
     assert_equal 1, result.states[:subscriptions]
@@ -39,21 +37,19 @@ class TestDecisionModel < Minitest::Test
 
   def test_condition_after_equals_max_position
     events = @store.append([
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"]),
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])
-    ])
+                             DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"]),
+                             DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])
+                           ])
 
     result = DcbEventStore::DecisionModel.build(@store,
-      count: counter_projection("counter:a")
-    )
+                                                count: counter_projection("counter:a"))
 
     assert_equal events.last.sequence_position, result.append_condition.after
   end
 
   def test_condition_after_nil_on_empty_store
     result = DcbEventStore::DecisionModel.build(@store,
-      count: counter_projection("counter:a")
-    )
+                                                count: counter_projection("counter:a"))
 
     assert_nil result.append_condition.after
     assert_equal 0, result.states[:count]
@@ -62,14 +58,13 @@ class TestDecisionModel < Minitest::Test
   def test_end_to_end_course_subscription
     # Define course with capacity 2
     @store.append([
-      DcbEventStore::Event.new(type: "CourseDefined", data: {capacity: 2}, tags: ["course:c1"])
-    ])
+                    DcbEventStore::Event.new(type: "CourseDefined", data: {capacity: 2}, tags: ["course:c1"])
+                  ])
 
     # First student subscribes
     result = DcbEventStore::DecisionModel.build(@store,
-      capacity: capacity_projection("course:c1"),
-      subscriptions: subscription_count_projection("course:c1")
-    )
+                                                capacity: capacity_projection("course:c1"),
+                                                subscriptions: subscription_count_projection("course:c1"))
     assert_equal 2, result.states[:capacity]
     assert_equal 0, result.states[:subscriptions]
 
@@ -80,9 +75,8 @@ class TestDecisionModel < Minitest::Test
 
     # Second student subscribes
     result = DcbEventStore::DecisionModel.build(@store,
-      capacity: capacity_projection("course:c1"),
-      subscriptions: subscription_count_projection("course:c1")
-    )
+                                                capacity: capacity_projection("course:c1"),
+                                                subscriptions: subscription_count_projection("course:c1"))
     assert_equal 1, result.states[:subscriptions]
 
     @store.append(
@@ -107,8 +101,8 @@ class TestDecisionModel < Minitest::Test
       initial_state: 0,
       handlers: { "Increment" => ->(state, _e) { state + 1 } },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Increment"], tags: [tag])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Increment"], tags: [tag])
+                                      ])
     )
   end
 
@@ -119,8 +113,8 @@ class TestDecisionModel < Minitest::Test
         "CourseDefined" => ->(_, e) { e.data[:capacity] }
       },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["CourseDefined"], tags: [course_tag])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["CourseDefined"], tags: [course_tag])
+                                      ])
     )
   end
 
@@ -131,8 +125,9 @@ class TestDecisionModel < Minitest::Test
         "StudentSubscribed" => ->(state, _e) { state + 1 }
       },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["StudentSubscribed"], tags: [course_tag])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["StudentSubscribed"],
+                                                                     tags: [course_tag])
+                                      ])
     )
   end
 end

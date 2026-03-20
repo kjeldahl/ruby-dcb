@@ -92,7 +92,7 @@ class TestClient < Minitest::Test
   def test_delegates_read
     store = FakeStore.new
     ctx = DcbEventStore::Client.new(store)
-    assert_equal [:read, :q], ctx.read(:q)
+    assert_equal %i[read q], ctx.read(:q)
   end
 
   def test_delegates_read_from

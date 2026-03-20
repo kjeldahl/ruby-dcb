@@ -55,8 +55,8 @@ class TestProjection < Minitest::Test
         "Increment" => ->(state, _event) { state + 1 }
       },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Increment"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Increment"])
+                                      ])
     )
   end
 end

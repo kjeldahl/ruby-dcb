@@ -17,7 +17,7 @@ class TestReadFrom < Minitest::Test
 
     events = @store.read_from(DcbEventStore::Query.all, after: 5).to_a
     assert_equal 5, events.size
-    assert events.all? { |e| e.sequence_position > 5 }
+    assert(events.all? { |e| e.sequence_position > 5 })
   end
 
   def test_read_from_with_filtered_query
@@ -25,11 +25,11 @@ class TestReadFrom < Minitest::Test
     5.times { @store.append([DcbEventStore::Event.new(type: "B")]) }
 
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["A"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: ["A"])
+                                     ])
     events = @store.read_from(query, after: 3).to_a
     assert_equal 2, events.size
-    assert events.all? { |e| e.type == "A" && e.sequence_position > 3 }
+    assert(events.all? { |e| e.type == "A" && e.sequence_position > 3 })
   end
 
   def test_read_from_zero_returns_all

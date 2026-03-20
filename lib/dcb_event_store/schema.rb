@@ -1,6 +1,6 @@
 module DcbEventStore
   module Schema
-    CREATE_SQL = <<~SQL
+    CREATE_SQL = <<~SQL.freeze
       CREATE TABLE IF NOT EXISTS events (
         sequence_position BIGSERIAL PRIMARY KEY,
         event_id          UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -29,7 +29,7 @@ module DcbEventStore
         FOR EACH ROW EXECUTE FUNCTION prevent_event_mutation();
     SQL
 
-    DROP_SQL = "DROP TABLE IF EXISTS events CASCADE;"
+    DROP_SQL = "DROP TABLE IF EXISTS events CASCADE;".freeze
 
     def self.create!(conn)
       conn.exec(CREATE_SQL)
