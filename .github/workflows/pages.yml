@@ -67,7 +67,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v4
 
   persist-history:
     needs: build
@@ -97,7 +97,7 @@ jobs:
           fi
 
       - name: Download pages artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: github-pages
           path: /tmp/pages-artifact
