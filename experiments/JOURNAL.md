@@ -67,6 +67,36 @@ Replace `SELECT COUNT(*) FROM events WHERE ...` with
 COUNT vs EXISTS doesn't matter when the GIN index efficiently filters to
 near-zero results. The query planner likely already short-circuits.
 
+### Query plan analysis
+
+**Without `after` filter** (full table — not what runs during append):
+
+| | COUNT | EXISTS |
+|---|---|---|
+| Strategy | Bitmap Heap Scan (GIN) | Seq Scan, stops at 1st row |
+| Execution | 33.18ms | 0.10ms |
+| Planning | 20.58ms | 7.58ms |
+| Buffers | hit=871, read=135 | hit=1 |
+
+EXISTS is dramatically faster here because it stops after finding one row
+while COUNT scans all 1018 matches. But this query never runs in practice.
+
+**With `after` filter** (what actually runs — `sequence_position > max_pos`):
+
+| | COUNT | EXISTS |
+|---|---|---|
+| Strategy | Index Scan (PK) | Index Scan (PK) |
+| Execution | 0.25ms | 0.12ms |
+| Planning | 1.49ms | 0.21ms |
+| Buffers | hit=53 | hit=50 |
+| Rows scanned | 99 (filtered) | 99 (filtered) |
+
+Both use the primary key index and scan the same ~99 rows past the
+`after` position. EXISTS is 2x faster on execution but both are sub-ms.
+The condition check was already measured at 0.37ms p50 — at this scale
+the difference is noise. EXISTS would only win if the `after` position
+were far behind and many matching rows existed past it.
+
 ---
 
 ## Experiment 2: Per-tag advisory locks
