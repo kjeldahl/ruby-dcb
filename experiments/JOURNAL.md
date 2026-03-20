@@ -460,3 +460,133 @@ The throughput ceiling depends on the scenario:
 - **For extreme throughput:** connection pooling (PgBouncer) to
   handle the increased concurrent connection load from unlocked
   parallelism.
+
+---
+
+## Experiment 9: Separate tags table vs TEXT[] array
+
+**Hypothesis:** Storing tags in a normalized `event_tags(sequence_position, tag)`
+table instead of a `TEXT[]` column could improve query performance. Btree index
+lookups on exact tag values may be faster than GIN array containment (`@>`),
+especially for selective single-tag queries.
+
+### Schema comparison
+
+**Current (Schema A):** Single `events` table with `tags TEXT[]` column and
+GIN index.
+
+**Alternative (Schema B):** `events` table without tags column + separate
+`event_tags` table:
+```sql
+CREATE TABLE event_tags (
+  sequence_position BIGINT NOT NULL REFERENCES events(sequence_position),
+  tag               TEXT NOT NULL
+);
+CREATE INDEX idx_event_tags_tag ON event_tags (tag);
+CREATE INDEX idx_event_tags_tag_pos ON event_tags (tag, sequence_position);
+CREATE INDEX idx_event_tags_pos ON event_tags (sequence_position);
+```
+
+Two query strategies tested for the tags table:
+- **CTE+EXISTS:** CTE to find matching positions, then EXISTS subqueries
+  for multi-tag conditions
+- **UNION:** Separate queries per unique tag, combined with UNION
+
+### Baseline on this machine
+
+First, the current `performance.rb` benchmark to establish baseline timings
+on this hardware (Linux x86_64, PostgreSQL 16):
+
+| Operation | p50 | p90 | p99 | stddev |
+|-----------|-----|-----|-----|--------|
+| Read single course (GIN) | 30.02ms | 34.10ms | 38.91ms | 2.49ms |
+| Read single student (GIN) | 3.87ms | 4.14ms | 4.79ms | 0.23ms |
+| Student+course intersection | 5.65ms | 5.86ms | 6.39ms | 0.19ms |
+| DM.build popular course | 60.43ms | 68.42ms | 79.92ms | 5.30ms |
+| DM.build random | 65.06ms | 77.85ms | 90.43ms | 11.56ms |
+| Append + condition | 65.84ms | 73.00ms | 81.45ms | 10.25ms |
+| 10 threads x 5 ops | 25 ops/sec | | | |
+| 10 procs x 100 ops | 97 ops/sec | | | |
+
+### Tags table experiment results
+
+Dataset: 100k students, 500 courses, 500k events, 50 iterations.
+
+#### Read performance (p50)
+
+| Query | Array (GIN) | Tags table | Strategy | Speedup |
+|-------|------------|------------|----------|---------|
+| Single course (~1000 events) | 7.51ms | 7.55ms | JOIN | ~same |
+| Single student (5 events) | 3.73ms | **0.30ms** | JOIN | **12.4x** |
+| Student+course intersection | 5.62ms | **3.23ms** | GROUP+HAVING | **1.7x** |
+| Decision model (5 proj) | 24.56ms | **9.47ms** | UNION | **2.6x** |
+| Decision model random | 27.70ms | **12.05ms** | UNION | **2.3x** |
+| Condition check (no conflict) | 7.68ms | 7.29ms | EXISTS | ~same |
+
+#### Storage
+
+| | Array schema | Tags table schema | Difference |
+|---|---|---|---|
+| Events table | 165 MB | 111 MB | -33% (no tags column) |
+| Tags table | — | 175 MB | new |
+| **Combined total** | **165 MB** | **286 MB** | **+73%** |
+| Tag index (GIN) | 15 MB | — | — |
+| Tag indexes (btree) | — | 118 MB | 8x larger |
+
+### Analysis
+
+**Single student lookups are 12x faster.** The btree index on `(tag)` does an
+exact equality lookup (`tag = 'student:student-0'`) which resolves to just 5
+rows immediately. The GIN index on `TEXT[]` uses array containment (`tags @>
+'{student:student-0}'`), which requires a bitmap scan — fast, but with more
+overhead per query.
+
+**Decision model queries are 2.3-2.6x faster.** The UNION strategy works well:
+each branch does a simple btree lookup on a single tag, then the results are
+merged. The GIN approach must evaluate 5 OR'd `tags @>` conditions, each
+requiring bitmap index scans that get OR'd together.
+
+**Single course lookups are the same.** Both return ~1000 rows, so the query
+time is dominated by fetching and transferring rows, not index lookup.
+
+**Condition checks are the same.** After `max_position` there are ~0 events,
+so both return instantly regardless of index type.
+
+**Storage is 73% larger.** The tags table adds 175 MB for 1M tag rows (2 tags
+per subscription event, 1 per course event). The btree indexes on the tags
+table (118 MB) are much larger than the single GIN index (15 MB) because btree
+stores the full tag value in each index entry, while GIN stores each unique
+value once with a posting list of matching rows.
+
+### Query strategy comparison
+
+The CTE+EXISTS approach was consistently slower than UNION:
+
+| | CTE+EXISTS p50 | UNION p50 |
+|---|---|---|
+| Decision model (fixed) | 10.66ms | **9.47ms** |
+| Decision model (random) | 14.61ms | **12.05ms** |
+
+UNION is simpler and allows PostgreSQL to optimize each branch independently.
+
+### Verdict
+
+**The separate tags table significantly improves read performance** for the
+primary bottleneck (DecisionModel.build), cutting it roughly in half. This
+directly addresses the #1 finding from previous experiments: "Sequential
+bottleneck is DecisionModel.build (30ms)."
+
+**Trade-offs:**
+- **Pro:** 2.3-2.6x faster decision model reads, 12x faster single-tag lookups
+- **Pro:** Simpler indexes (btree vs GIN), standard SQL JOINs vs array operators
+- **Con:** 73% more storage (286 MB vs 165 MB for 500k events)
+- **Con:** More complex inserts (must write to two tables)
+- **Con:** More complex queries (JOINs vs single-table `@>`)
+- **Con:** Foreign key + extra indexes slow down writes
+
+**Recommendation:** The tags table approach is worth considering if read
+performance is the priority. The 2.3x improvement on decision model reads
+would reduce the end-to-end append+condition from ~65ms to ~40ms on this
+machine. However, the storage overhead and write complexity may not justify
+the gain for smaller datasets. The GIN array approach is simpler and
+"good enough" for most workloads.
