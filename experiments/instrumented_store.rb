@@ -20,39 +20,14 @@ module Experiments
       timing = {}
 
       with_transaction do
-        timing[:lock_wait] = measure { @conn.exec("SELECT pg_advisory_xact_lock($1)", [APPEND_LOCK_KEY]) }
+        timing[:lock_wait] = measure { acquire_locks!(condition) }
 
         if condition
           timing[:condition_check] = measure { check_condition!(condition) }
         end
 
         timing[:insert] = measure do
-          @sequenced = events.filter_map do |event|
-            result = @conn.exec_params(
-              <<~SQL,
-                INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
-                VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
-                ON CONFLICT (event_id) DO NOTHING
-                RETURNING sequence_position, created_at
-              SQL
-              [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
-               event.causation_id, event.correlation_id, 1]
-            )
-            next nil if result.ntuples.zero?
-
-            row = result[0]
-            DcbEventStore::SequencedEvent.new(
-              sequence_position: row["sequence_position"].to_i,
-              type: event.type,
-              data: event.data,
-              tags: event.tags,
-              created_at: Time.parse(row["created_at"]),
-              id: event.id,
-              causation_id: event.causation_id,
-              correlation_id: event.correlation_id,
-              schema_version: 1
-            )
-          end
+          @sequenced = append_without_condition(events)
         end
 
         timing[:notify] = measure do
