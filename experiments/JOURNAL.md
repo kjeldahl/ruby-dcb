@@ -248,16 +248,89 @@ near-zero lock wait with no correctness tradeoff.
 
 ---
 
+## Experiment 7 & 8: Correct multi-tag locks
+
+Experiments 2 and 6 had a correctness bug: they hashed all tags into one
+lock key. When an event spans multiple consistency boundaries (e.g.
+`student:alice` + `course:math-101`), two appends with overlapping but
+non-identical tag sets get different lock keys and run concurrently —
+violating the constraint.
+
+**Fix:** Acquire one advisory lock per unique tag, in sorted order
+(preventing deadlocks). A PL/pgSQL stored procedure handles this in one
+round-trip:
+
+```sql
+CREATE FUNCTION acquire_sorted_advisory_locks(lock_keys bigint[])
+RETURNS void AS $$
+DECLARE k bigint;
+BEGIN
+  FOREACH k IN ARRAY (SELECT array_agg(x ORDER BY x) FROM unnest(lock_keys) x)
+  LOOP
+    PERFORM pg_advisory_xact_lock(k);
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### Results (concurrent, 10 threads x 10 ops)
+
+| Experiment | lock_wait p50 | total p50 | ops/sec | Correct? |
+|-----------|--------------|----------|---------|----------|
+| Baseline (global) | 83.82ms | 98.12ms | 54 | Yes |
+| Exp 2: Per-tag (BROKEN) | 0.52ms | 5.31ms | 54 | **No** |
+| **Exp 7: Multi-tag** | **0.65ms** | **20.81ms** | **53** | **Yes** |
+| Exp 6: Per-tag+CTE (BROKEN) | 0.59ms | 6.90ms | 57 | **No** |
+| **Exp 8: Multi-tag+CTE** | **2.18ms** | **21.43ms** | **48** | **Yes** |
+
+### Analysis
+
+The correct multi-lock approach (Exp 7/8) is ~4x better than baseline on
+p50 latency (20ms vs 98ms), but ~3-4x worse than the broken single-hash
+approach (5ms). The cost comes from:
+
+1. **More lock acquisitions** — subscribe_student has tags across 5
+   query items: `course:X`, `student:Y`, and `student:Y,course:X`.
+   After dedup that's 2 unique tags → 2 locks per append.
+
+2. **Higher contention** — locking on `student:alice` means ANY append
+   involving alice serializes, even across different courses. This is
+   correct (student subscription count must be consistent) but creates
+   more contention than the broken approach.
+
+3. **PG I/O contention** — with locks held for shorter but the
+   condition_check/insert now competing for shared PG resources, the
+   p90/p99 spikes (76ms/169ms for Exp 7).
+
+4. **Stored procedure overhead** — the PL/pgSQL function adds ~0.06ms
+   per call sequentially, negligible.
+
+### Sequential overhead
+
+| | p50 | p99 |
+|---|---|---|
+| Baseline | 0.75ms | 1.42ms |
+| Exp 7 (multi-tag) | 0.82ms | 30.42ms |
+| Exp 8 (multi-tag+CTE) | 0.72ms | 6.75ms |
+
+The p99 spike on Exp 7 is likely from occasional lock contention even in
+sequential mode (the stored procedure queries `pg_catalog` which can
+have brief contention). CTE variant (Exp 8) is better at p99.
+
+---
+
 ## Summary
 
-| Experiment | Sequential p50 | Concurrent p50 | Concurrent ops/sec | Verdict |
-|-----------|---------------|---------------|-------------------|---------|
-| Baseline | 0.63ms | 82.76ms | 60 | — |
-| EXISTS vs COUNT | 0.64ms | 79.47ms | 59 | No change |
-| Per-tag locks | 0.64ms | 4.32ms | 59 | Great p50 |
-| CTE (single stmt) | 0.63ms | 77.35ms | 61 | Marginal |
-| Skip-lock | 0.63ms | 43.10ms | 56 | Bad tail latency |
-| **Per-tag + CTE** | 0.63ms | **7.70ms** | 58 | **Best overall** |
+| Experiment | Seq p50 | Conc p50 | ops/sec | Correct? | Verdict |
+|-----------|---------|---------|---------|----------|---------|
+| Baseline | 0.75ms | 98.12ms | 54 | Yes | — |
+| EXISTS vs COUNT | 0.64ms | 79.47ms | 59 | Yes | No change |
+| Per-tag (BROKEN) | 0.63ms | 5.31ms | 54 | **No** | — |
+| CTE only | 0.63ms | 77.35ms | 61 | Yes | Marginal |
+| Skip-lock | 0.63ms | 43.10ms | 56 | Yes | Bad tail |
+| Per-tag+CTE (BROKEN) | 0.68ms | 6.90ms | 57 | **No** | — |
+| **Multi-tag (correct)** | 0.82ms | **20.81ms** | 53 | Yes | **4.7x better** |
+| **Multi-tag+CTE** | 0.72ms | **21.43ms** | 48 | Yes | **4.6x better** |
 
 ## Conclusions
 
@@ -265,20 +338,22 @@ near-zero lock wait with no correctness tradeoff.
    path (0.65ms). Optimizing the read/fold path would have the biggest
    single-writer impact.
 
-2. **Concurrent bottleneck is the global advisory lock.** Per-tag+CTE
-   (Exp 6) is the best approach — 10.7x better p50 latency (82ms → 7.7ms).
+2. **Correct multi-tag locking gives ~4.7x better concurrent p50** (98ms
+   → 21ms) while maintaining correctness. The broken single-hash approach
+   was faster (5ms) but allowed constraint violations.
 
-3. **Latency improves, throughput doesn't.** All experiments produce
-   ~58-61 ops/sec. The total PG write work is constant — we just
-   eliminated queueing delay. This means the throughput ceiling is PG
-   write capacity, not our locking strategy.
+3. **CTE doesn't help with multi-tag locks.** The extra round-trip saved
+   is negligible compared to lock acquisition and PG contention.
 
-4. **Condition check is already fast** (0.4ms). EXISTS vs COUNT and CTE
-   alone don't help because the GIN index + `after` filter make this cheap.
+4. **Latency improves, throughput stays flat** (~48-54 ops/sec). PG write
+   capacity is the ceiling, not our locking.
 
-5. **Read is already outside the lock.** No improvement possible here.
+5. **Condition check is already fast** (0.4ms). EXISTS vs COUNT and CTE
+   don't help because the GIN index + `after` filter make this cheap.
 
-6. **Skip-lock polling is counterproductive.** PG's built-in lock queue
+6. **Read is already outside the lock.** No improvement possible here.
+
+7. **Skip-lock polling is counterproductive.** PG's built-in FIFO queue
    is fairer than application-level retry.
 
 ## Recommended next steps
@@ -287,11 +362,10 @@ near-zero lock wait with no correctness tradeoff.
   COUNT-based projections (SQL aggregation instead of Ruby fold), or
   caching/materialized views for hot projections.
 
-- **For concurrent latency:** Adopt per-tag locks + CTE (Exp 6). Gives
-  near-zero lock wait when different entities append concurrently, with
-  no correctness tradeoff. May need PG connection pooling to handle
-  increased concurrent connection load.
+- **For concurrent latency:** Adopt multi-tag locks (Exp 7). Gives ~5x
+  better p50 with full correctness. The stored procedure approach keeps
+  it to one round-trip per lock acquisition.
 
-- **For concurrent throughput:** The ceiling is PG write speed. Would
-  require batching multiple appends per transaction, or horizontal
-  scaling (partitioned tables, multiple PG instances).
+- **For concurrent throughput:** The ceiling is PG write speed (~50
+  ops/sec). Would require batching multiple appends per transaction, or
+  horizontal scaling.

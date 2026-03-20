@@ -444,6 +444,189 @@ module ExperimentRunner
     end
   end
 
+  # Stored procedure: acquire multiple advisory locks in sorted order (one round-trip)
+  MULTI_LOCK_SQL = <<~SQL
+    CREATE OR REPLACE FUNCTION acquire_sorted_advisory_locks(lock_keys bigint[])
+    RETURNS void AS $$
+    DECLARE
+      k bigint;
+    BEGIN
+      FOREACH k IN ARRAY (SELECT array_agg(x ORDER BY x) FROM unnest(lock_keys) x)
+      LOOP
+        PERFORM pg_advisory_xact_lock(k);
+      END LOOP;
+    END;
+    $$ LANGUAGE plpgsql;
+  SQL
+
+  def self.create_multi_lock_function!(conn)
+    conn.exec(MULTI_LOCK_SQL)
+  end
+
+  # Compute lock keys from all unique tags in a condition query
+  def self.tag_lock_keys(condition)
+    return [0] unless condition
+    tags = condition.fail_if_events_match.items.flat_map(&:tags).uniq
+    return [0] if tags.empty?
+    tags.map { |t| t.hash.abs % (2**62) }.sort
+  end
+
+  # Experiment 7: Correct multi-tag locks (one lock per unique tag, sorted)
+  class MultiTagLockStore < Experiments::InstrumentedStore
+    def append(events, condition = nil)
+      events = Array(events)
+      timing = {}
+      keys = ExperimentRunner.tag_lock_keys(condition)
+
+      with_transaction do
+        timing[:lock_wait] = measure do
+          pg_arr = "{#{keys.join(",")}}"
+          @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [pg_arr])
+        end
+
+        if condition
+          timing[:condition_check] = measure { check_condition!(condition) }
+        end
+
+        timing[:insert] = measure do
+          @sequenced = insert_events(events)
+        end
+
+        timing[:notify] = measure { do_notify }
+
+        @sequenced
+      end
+
+      timing[:total] = timing.values.sum
+      @timings << timing
+      @sequenced
+    end
+
+    private
+
+    def insert_events(events)
+      events.filter_map do |event|
+        result = @conn.exec_params(
+          <<~SQL,
+            INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+            VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
+            ON CONFLICT (event_id) DO NOTHING
+            RETURNING sequence_position, created_at
+          SQL
+          [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
+           event.causation_id, event.correlation_id, 1]
+        )
+        next nil if result.ntuples.zero?
+
+        row = result[0]
+        DcbEventStore::SequencedEvent.new(
+          sequence_position: row["sequence_position"].to_i,
+          type: event.type, data: event.data, tags: event.tags,
+          created_at: Time.parse(row["created_at"]), id: event.id,
+          causation_id: event.causation_id, correlation_id: event.correlation_id,
+          schema_version: 1
+        )
+      end
+    end
+
+    def do_notify
+      notify_position = @sequenced.last&.sequence_position
+      @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
+    end
+  end
+
+  # Experiment 8: Correct multi-tag locks + CTE
+  class MultiTagCTEStore < Experiments::InstrumentedStore
+    def append(events, condition = nil)
+      events = Array(events)
+      timing = {}
+      keys = ExperimentRunner.tag_lock_keys(condition)
+
+      with_transaction do
+        timing[:lock_wait] = measure do
+          pg_arr = "{#{keys.join(",")}}"
+          @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [pg_arr])
+        end
+
+        if condition
+          timing[:condition_check] = 0.0
+          timing[:insert] = measure do
+            @sequenced = events.filter_map do |event|
+              cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
+              insert_params = [event.id, event.type, JSON.generate(event.data),
+                               "{#{event.tags.join(",")}}",
+                               event.causation_id, event.correlation_id, 1]
+              offset = cond_params.size
+              result = @conn.exec_params(
+                <<~SQL,
+                  WITH cond AS (#{cond_sql})
+                  INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+                  SELECT $#{offset + 1}, $#{offset + 2}, $#{offset + 3}::jsonb, $#{offset + 4}::text[],
+                         $#{offset + 5}, $#{offset + 6}, $#{offset + 7}
+                  WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
+                  ON CONFLICT (event_id) DO NOTHING
+                  RETURNING sequence_position, created_at
+                SQL
+                cond_params + insert_params
+              )
+
+              if result.ntuples.zero?
+                check = @conn.exec_params(*build_condition_sql(condition.fail_if_events_match, condition.after))
+                raise DcbEventStore::ConditionNotMet, "conflicting event(s)" if check[0]["count"].to_i.positive?
+                next nil
+              end
+
+              row = result[0]
+              DcbEventStore::SequencedEvent.new(
+                sequence_position: row["sequence_position"].to_i,
+                type: event.type, data: event.data, tags: event.tags,
+                created_at: Time.parse(row["created_at"]), id: event.id,
+                causation_id: event.causation_id, correlation_id: event.correlation_id,
+                schema_version: 1
+              )
+            end
+          end
+        else
+          timing[:insert] = measure do
+            @sequenced = events.filter_map do |event|
+              result = @conn.exec_params(
+                <<~SQL,
+                  INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+                  VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
+                  ON CONFLICT (event_id) DO NOTHING
+                  RETURNING sequence_position, created_at
+                SQL
+                [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
+                 event.causation_id, event.correlation_id, 1]
+              )
+              next nil if result.ntuples.zero?
+
+              row = result[0]
+              DcbEventStore::SequencedEvent.new(
+                sequence_position: row["sequence_position"].to_i,
+                type: event.type, data: event.data, tags: event.tags,
+                created_at: Time.parse(row["created_at"]), id: event.id,
+                causation_id: event.causation_id, correlation_id: event.correlation_id,
+                schema_version: 1
+              )
+            end
+          end
+        end
+
+        timing[:notify] = measure do
+          notify_position = @sequenced.last&.sequence_position
+          @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
+        end
+
+        @sequenced
+      end
+
+      timing[:total] = timing.values.sum
+      @timings << timing
+      @sequenced
+    end
+  end
+
   # Experiment 5: Optimistic skip-lock with retry
   class SkipLockStore < Experiments::InstrumentedStore
     MAX_RETRIES = 20
