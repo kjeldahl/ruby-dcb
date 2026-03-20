@@ -590,3 +590,150 @@ would reduce the end-to-end append+condition from ~65ms to ~40ms on this
 machine. However, the storage overhead and write complexity may not justify
 the gain for smaller datasets. The GIN array approach is simpler and
 "good enough" for most workloads.
+
+---
+
+## Experiment 10: Fully normalized tags (lookup table + join table)
+
+**Hypothesis:** Full normalization — a `tags(id, value)` lookup table storing each
+unique tag once, plus an `event_tags(sequence_position, tag_id)` join table with
+integer foreign keys — could reduce storage vs the denormalized tags table (Exp 9)
+while maintaining or improving query performance through smaller integer-based indexes.
+
+### Schema comparison
+
+**Schema A (baseline):** `events.tags TEXT[]` with GIN index.
+
+**Schema B (Exp 9):** `event_tags(sequence_position, tag TEXT)` — denormalized,
+each tag string repeated per event.
+
+**Schema C (new):** Fully normalized:
+```sql
+CREATE TABLE tags (
+  id    BIGSERIAL PRIMARY KEY,
+  value TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE event_tags (
+  sequence_position BIGINT NOT NULL REFERENCES events(sequence_position),
+  tag_id            BIGINT NOT NULL REFERENCES tags(id)
+);
+CREATE INDEX idx_event_tags_tag_id ON event_tags (tag_id);
+CREATE INDEX idx_event_tags_tag_id_pos ON event_tags (tag_id, sequence_position);
+CREATE INDEX idx_event_tags_pos ON event_tags (sequence_position);
+```
+
+Two query modes tested for Schema C:
+- **Normalized:** Queries resolve tag values via JOIN to `tags` table at query time
+- **Norm+cached:** Pre-resolve tag IDs in application code, query `event_tags` directly by `tag_id`
+
+### Baseline on this machine
+
+Dataset: 100k students, 500 courses, 500k events, 50 iterations.
+
+| Operation | p50 | p90 | p99 | stddev |
+|-----------|-----|-----|-----|--------|
+| Read single course (GIN) | 10.06ms | 11.26ms | 16.84ms | 1.63ms |
+| Read single student (GIN) | 4.81ms | 5.07ms | 5.38ms | 0.18ms |
+| Student+course intersection | 7.74ms | 7.97ms | 8.09ms | 0.15ms |
+| DM.build (5 proj, fixed) | 32.96ms | 35.02ms | 43.09ms | 2.40ms |
+| DM.build (random) | 36.90ms | 44.20ms | 47.91ms | 4.03ms |
+| Condition check | 0.38ms | 0.48ms | 1.81ms | 0.37ms |
+
+### Results
+
+#### Read performance (p50)
+
+| Query | Array (GIN) | Denorm tags | Normalized | Norm+cached |
+|-------|------------|-------------|------------|-------------|
+| Single course (~1000 events) | 10.06ms | 13.44ms | **7.00ms** | — |
+| Single student (5 events) | 4.81ms | **0.32ms** | 0.53ms | — |
+| Student+course intersection | 7.74ms | 7.62ms | **3.55ms** | — |
+| Decision model (fixed) | 32.96ms | 13.75ms | **8.96ms** | 9.58ms |
+| Decision model (random) | 36.90ms | 15.88ms | **12.01ms** | 10.55ms |
+| Condition check | **0.38ms** | 0.59ms | 1.44ms | 0.56ms |
+
+#### Storage
+
+| | Array (A) | Denorm tags (B) | Normalized (C) |
+|---|---|---|---|
+| Events table | 166 MB | 111 MB | 111 MB |
+| Tags lookup table | — | — | 22 MB |
+| Event_tags table | — | 175 MB | 107 MB |
+| **Combined total** | **166 MB** | **287 MB** | **239 MB** |
+
+#### Index sizes
+
+| Schema | Index | Size |
+|--------|-------|------|
+| Array | GIN (tags) | 15 MB |
+| Denorm | btree (tag) | 17 MB |
+| Denorm | btree (tag, pos) | 82 MB |
+| Denorm | btree (pos) | 19 MB |
+| Normalized | btree (tag_id) | 10 MB |
+| Normalized | btree (tag_id, pos) | 35 MB |
+| Normalized | btree (pos) | 19 MB |
+| Normalized | tags.value unique | 7 MB |
+| Normalized | tags.value index | 7 MB |
+
+### Analysis
+
+**Decision model reads are 3.7x faster than baseline.** The normalized schema
+delivers 8.96ms p50 vs 32.96ms for the GIN array. This beats even the
+denormalized tags table from Exp 9 (13.75ms) by 35%. The integer `tag_id`
+joins are more efficient than text-based joins — smaller index entries mean
+more fit in memory and fewer cache misses.
+
+**Single course reads are 30% faster than baseline and 48% faster than
+denormalized.** At 7.00ms vs 10.06ms (array) and 13.44ms (denorm). The
+integer join is cheaper than both GIN containment and text-based joins for
+larger result sets.
+
+**Single student reads: denormalized still wins.** Denormalized (0.32ms)
+beats normalized (0.53ms) by 40%. The extra join to the `tags` table adds
+overhead for tiny result sets. Both are dramatically faster than the GIN
+array (4.81ms).
+
+**Intersection queries are 2.2x faster.** 3.55ms vs 7.74ms (array). The
+GROUP BY + HAVING on integer `tag_id` is efficient.
+
+**Pre-caching tag IDs doesn't help reads much.** Norm+cached (9.58ms) is
+similar to normalized (8.96ms) for the fixed case. PostgreSQL's query
+planner resolves the `tags.value = $1` lookup so efficiently (the unique
+index returns one row) that eliminating the join barely matters. Caching
+does help condition checks (0.56ms vs 1.44ms).
+
+**Condition checks are slightly slower.** 1.44ms (normalized) vs 0.38ms
+(array). The extra joins in the EXISTS subqueries add overhead. With
+pre-cached tag IDs this drops to 0.56ms — still fast and well within
+acceptable range. This is only relevant during appends, not reads.
+
+**Storage is 44% larger than array but 17% smaller than denormalized.**
+The normalized schema (239 MB) saves 48 MB over denormalized (287 MB)
+because integer `tag_id` values in indexes are much smaller than repeated
+text strings. The `(tag_id, sequence_position)` composite index is 35 MB
+vs 82 MB for the `(tag, sequence_position)` text-based equivalent — a 57%
+reduction. The extra `tags` lookup table adds only 22 MB for 100k unique
+tags.
+
+### Verdict
+
+**Normalized tags is the best-performing schema for read-heavy workloads.**
+It beats both the GIN array and the denormalized tags table on the primary
+bottleneck (DecisionModel.build), delivering 3.7x improvement over baseline.
+
+**Trade-offs:**
+- **Pro:** 3.7x faster decision model reads (8.96ms vs 32.96ms)
+- **Pro:** 17% less storage than denormalized (239 MB vs 287 MB)
+- **Pro:** Integer indexes are ~57% smaller than text indexes
+- **Pro:** Tag lookup table enables O(1) tag-to-ID resolution
+- **Con:** 44% more storage than array (239 MB vs 166 MB)
+- **Con:** Condition checks slightly slower (1.44ms vs 0.38ms, mitigated by caching)
+- **Con:** Insert complexity: must resolve/insert tag IDs before writing event_tags
+- **Con:** Three tables to manage vs one
+- **Con:** Single student reads slower than denormalized (0.53ms vs 0.32ms)
+
+**Recommendation:** If adopting a tags table approach, prefer the fully
+normalized schema over denormalized. It's faster for the dominant workload
+(decision model reads), uses less storage, and the tag lookup table opens
+the door to application-level tag ID caching for even faster writes.
