@@ -104,7 +104,8 @@ jobs:
 
       - name: Extract and update history
         run: |
-          tar -xf /tmp/pages-artifact/artifact.tar -C /tmp/pages-extracted 2>/dev/null || mkdir -p /tmp/pages-extracted
+          mkdir -p /tmp/pages-extracted
+          tar -xf /tmp/pages-artifact/artifact.tar -C /tmp/pages-extracted 2>/dev/null || true
           if [ -f /tmp/pages-extracted/coverage_history.json ]; then
             cp /tmp/pages-extracted/coverage_history.json coverage_history.json
           fi
