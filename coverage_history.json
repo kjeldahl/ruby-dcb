@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "timestamp": "2026-03-20T17:13:29Z",
+    "commit": "e40a904",
+    "line_percent": 97.66,
+    "covered_lines": 250,
+    "total_lines": 256,
+    "branch_percent": 97.66
+  }
+]
