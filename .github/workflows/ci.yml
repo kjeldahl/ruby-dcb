@@ -50,7 +50,6 @@ jobs:
           retention-days: 30
 
   coverage-report:
-    if: github.event_name == 'pull_request'
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -63,24 +62,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download PR coverage
+      - name: Download coverage
         uses: actions/download-artifact@v4
         with:
           name: coverage-report-${{ github.sha }}
           path: coverage-pr/
 
       - name: Start PostgreSQL
+        if: github.event_name == 'pull_request'
         run: |
           sudo systemctl start postgresql.service
           sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
           sudo -u postgres createdb dcb_event_store_test
 
       - uses: ruby/setup-ruby@v1
+        if: github.event_name == 'pull_request'
         with:
           ruby-version: "3.4"
           bundler-cache: true
 
       - name: Generate base branch coverage
+        if: github.event_name == 'pull_request'
         run: |
           git fetch origin ${{ github.base_ref }}
           git checkout origin/${{ github.base_ref }}
@@ -89,6 +91,7 @@ jobs:
           cp coverage/coverage.json /tmp/base_coverage.json || true
 
       - name: Checkout back to PR
+        if: github.event_name == 'pull_request'
         run: git checkout ${{ github.sha }}
 
       - name: Generate coverage change report
@@ -101,6 +104,7 @@ jobs:
           cat coverage_summary.md
 
       - name: Comment on PR
+        if: github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: coverage
