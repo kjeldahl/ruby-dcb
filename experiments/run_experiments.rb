@@ -349,6 +349,101 @@ module ExperimentRunner
     end
   end
 
+  # Experiment 6: Per-tag locks + CTE (combine exp 2 and 3)
+  class PerTagCTEStore < Experiments::InstrumentedStore
+    def append(events, condition = nil)
+      events = Array(events)
+      timing = {}
+
+      lock_key = if condition
+                   tags = condition.fail_if_events_match.items.flat_map(&:tags).sort
+                   tags.join(",").hash.abs % (2**31)
+                 else
+                   0
+                 end
+
+      with_transaction do
+        timing[:lock_wait] = measure { @conn.exec("SELECT pg_advisory_xact_lock($1)", [lock_key]) }
+
+        if condition
+          timing[:condition_check] = 0.0
+          timing[:insert] = measure do
+            @sequenced = events.filter_map do |event|
+              cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
+              insert_params = [event.id, event.type, JSON.generate(event.data),
+                               "{#{event.tags.join(",")}}",
+                               event.causation_id, event.correlation_id, 1]
+              offset = cond_params.size
+              result = @conn.exec_params(
+                <<~SQL,
+                  WITH cond AS (#{cond_sql})
+                  INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+                  SELECT $#{offset + 1}, $#{offset + 2}, $#{offset + 3}::jsonb, $#{offset + 4}::text[],
+                         $#{offset + 5}, $#{offset + 6}, $#{offset + 7}
+                  WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
+                  ON CONFLICT (event_id) DO NOTHING
+                  RETURNING sequence_position, created_at
+                SQL
+                cond_params + insert_params
+              )
+
+              if result.ntuples.zero?
+                check = @conn.exec_params(*build_condition_sql(condition.fail_if_events_match, condition.after))
+                raise DcbEventStore::ConditionNotMet, "conflicting event(s)" if check[0]["count"].to_i.positive?
+                next nil
+              end
+
+              row = result[0]
+              DcbEventStore::SequencedEvent.new(
+                sequence_position: row["sequence_position"].to_i,
+                type: event.type, data: event.data, tags: event.tags,
+                created_at: Time.parse(row["created_at"]), id: event.id,
+                causation_id: event.causation_id, correlation_id: event.correlation_id,
+                schema_version: 1
+              )
+            end
+          end
+        else
+          timing[:insert] = measure do
+            @sequenced = events.filter_map do |event|
+              result = @conn.exec_params(
+                <<~SQL,
+                  INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+                  VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
+                  ON CONFLICT (event_id) DO NOTHING
+                  RETURNING sequence_position, created_at
+                SQL
+                [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(",")}}",
+                 event.causation_id, event.correlation_id, 1]
+              )
+              next nil if result.ntuples.zero?
+
+              row = result[0]
+              DcbEventStore::SequencedEvent.new(
+                sequence_position: row["sequence_position"].to_i,
+                type: event.type, data: event.data, tags: event.tags,
+                created_at: Time.parse(row["created_at"]), id: event.id,
+                causation_id: event.causation_id, correlation_id: event.correlation_id,
+                schema_version: 1
+              )
+            end
+          end
+        end
+
+        timing[:notify] = measure do
+          notify_position = @sequenced.last&.sequence_position
+          @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
+        end
+
+        @sequenced
+      end
+
+      timing[:total] = timing.values.sum
+      @timings << timing
+      @sequenced
+    end
+  end
+
   # Experiment 5: Optimistic skip-lock with retry
   class SkipLockStore < Experiments::InstrumentedStore
     MAX_RETRIES = 20
@@ -492,6 +587,7 @@ module ExperimentRunner
       "Exp 2: Per-tag locks" => PerTagLockStore,
       "Exp 3: CTE (single stmt)" => CTEStore,
       "Exp 5: Skip-lock + retry" => SkipLockStore,
+      "Exp 6: Per-tag + CTE" => PerTagCTEStore,
     }
 
     experiments.each do |name, store_class|
