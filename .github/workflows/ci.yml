@@ -83,17 +83,17 @@ jobs:
           git checkout origin/${{ github.base_ref }}
           bundle install
           bundle exec rake || true
-          cp coverage/.resultset.json /tmp/base_coverage.json || true
+          cp coverage/coverage.json /tmp/base_coverage.json || true
 
       - name: Checkout back to PR
         run: git checkout ${{ github.sha }}
 
       - name: Generate coverage change report
         run: |
-          if [ -f /tmp/base_coverage.json ] && [ -f coverage-pr/.resultset.json ]; then
-            ruby scripts/coverage_report.rb /tmp/base_coverage.json coverage-pr/.resultset.json > coverage_summary.md
+          if [ -f /tmp/base_coverage.json ] && [ -f coverage-pr/coverage.json ]; then
+            ruby scripts/coverage_report.rb /tmp/base_coverage.json coverage-pr/coverage.json > coverage_summary.md
           else
-            ruby scripts/coverage_report.rb coverage-pr/.resultset.json > coverage_summary.md
+            ruby scripts/coverage_report.rb coverage-pr/coverage.json > coverage_summary.md
           fi
           cat coverage_summary.md
 
