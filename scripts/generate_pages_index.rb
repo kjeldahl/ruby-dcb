@@ -68,8 +68,8 @@ html = <<~HTML
 
     <div class="card">
       <h2>Coverage Over Time</h2>
-      #{if history.length < 2
-          '<p class="empty">Chart will appear after at least 2 data points.</p>'
+      #{if history.empty?
+          '<p class="empty">Chart will appear after the first push to main.</p>'
         else
           '<canvas id="chart"></canvas>'
         end}
@@ -77,7 +77,7 @@ html = <<~HTML
 
     <script>
       const history = #{history.to_json};
-      if (history.length >= 2) {
+      if (history.length >= 1) {
         const ctx = document.getElementById('chart').getContext('2d');
         new Chart(ctx, {
           type: 'line',
