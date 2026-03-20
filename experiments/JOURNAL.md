@@ -356,16 +356,107 @@ have brief contention). CTE variant (Exp 8) is better at p99.
 7. **Skip-lock polling is counterproductive.** PG's built-in FIFO queue
    is fairer than application-level retry.
 
+---
+
+## Cross-scenario validation
+
+Tested Multi-tag+CTE (Exp 8) against baseline across four contention
+patterns to verify it doesn't regress in any scenario.
+
+### Contention patterns
+
+| Scenario | Query tags | Contention |
+|----------|-----------|------------|
+| Course subscriptions | Multi-entity (`student:X` + `course:Y`) | Medium |
+| Invoice numbers | Type-only (no tags → global lock) | **Total** |
+| Unique usernames | Single tag (`username:X`) | Low |
+| Idempotency tokens | Unique tag per event | **Zero** |
+
+### Results: Concurrent p50
+
+| Scenario | Baseline | Multi-tag+CTE | Speedup |
+|----------|---------|--------------|---------|
+| Course subscriptions | 64.39ms | **4.46ms** | **14.4x** |
+| Invoice numbers | 74.78ms | 55.95ms | 1.3x |
+| Unique usernames | 31.00ms | **4.46ms** | **7.0x** |
+| Idempotency tokens | 13.22ms | **1.84ms** | **7.2x** |
+
+### Results: Concurrent ops/sec
+
+| Scenario | Baseline | Multi-tag+CTE | Speedup |
+|----------|---------|--------------|---------|
+| Course subscriptions | 58 | 58 | 1.0x |
+| Invoice numbers | 4 | 4 | 1.0x |
+| Unique usernames | 265 | **772** | **2.9x** |
+| Idempotency tokens | 509 | **1591** | **3.1x** |
+
+### Analysis
+
+**Multi-tag+CTE wins or ties in every scenario. No regressions.**
+
+- **Course subscriptions:** 14.4x latency improvement. Lock contention
+  drops because different student+course pairs get different lock keys.
+  Throughput flat (PG write ceiling for this read-heavy workload).
+
+- **Invoice numbers:** Only 1.3x improvement. The type-only query has
+  no tags, so multi-tag falls back to `lock_key=0` — effectively a
+  global lock. The small win comes from CTE eliminating one round-trip.
+  This is the worst case for multi-tag and it still doesn't regress.
+  Throughput is 4 ops/sec because DecisionModel.build reads ALL 10k
+  invoices every time (no tag filter).
+
+- **Unique usernames:** 7x latency, 2.9x throughput. Each username is
+  an independent tag — near-zero lock contention. The condition check
+  also benefits from single-tag GIN lookups.
+
+- **Idempotency tokens:** 7.2x latency, 3.1x throughput. Best case —
+  every token is globally unique, so locks never contend. 1591 ops/sec
+  shows the true PG write throughput when nothing serializes.
+
+### Key insight: throughput unlocked for low-contention scenarios
+
+The earlier experiments only tested course subscriptions (medium
+contention, heavy read path) where throughput stayed flat. With
+low/zero contention patterns, multi-tag+CTE actually **triples
+throughput** because the global lock was the bottleneck all along —
+not PG writes.
+
+The throughput ceiling depends on the scenario:
+- **Total contention** (invoices): ~4 ops/sec (read-bound, reads ALL events)
+- **Medium contention** (courses): ~58 ops/sec (lock + read bound)
+- **Low contention** (usernames): ~772 ops/sec with multi-tag
+- **Zero contention** (tokens): ~1591 ops/sec with multi-tag
+
+---
+
+## Final conclusions
+
+1. **Multi-tag+CTE is the recommended approach.** It wins or ties
+   baseline in every scenario tested. No regressions found.
+
+2. **Latency improvement ranges from 1.3x to 14.4x** depending on
+   contention level. Worst case (total contention) is a slight win.
+
+3. **Throughput improvement up to 3.1x** for low/zero contention
+   scenarios. For high-contention scenarios, throughput is bounded
+   by the read path (DecisionModel.build), not the lock.
+
+4. **The invoice scenario reveals a different bottleneck:** type-only
+   queries read ALL events. This needs a separate optimization
+   (SQL aggregation, backward read with LIMIT 1, or caching).
+
+5. **Correctness is maintained** by acquiring one advisory lock per
+   unique tag in sorted order via a PL/pgSQL stored procedure.
+
 ## Recommended next steps
 
-- **For single-writer latency:** Optimize DecisionModel.build — consider
-  COUNT-based projections (SQL aggregation instead of Ruby fold), or
-  caching/materialized views for hot projections.
+- **Adopt Multi-tag+CTE** for the store's append path. The stored
+  procedure approach handles correctness in one round-trip.
 
-- **For concurrent latency:** Adopt multi-tag locks (Exp 7). Gives ~5x
-  better p50 with full correctness. The stored procedure approach keeps
-  it to one round-trip per lock acquisition.
+- **Optimize type-only queries** (invoice pattern): the backwards
+  read approach from the dcb.events example (read last event only)
+  would eliminate the full-table fold.
 
-- **For concurrent throughput:** The ceiling is PG write speed (~50
-  ops/sec). Would require batching multiple appends per transaction, or
-  horizontal scaling.
+- **For extreme throughput:** connection pooling (PgBouncer) to
+  handle the increased concurrent connection load from unlocked
+  parallelism.
