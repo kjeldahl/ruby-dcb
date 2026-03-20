@@ -63,3 +63,4 @@ test/
 ## Steps
 - **Phase 1** (core): `step_01.md` through `step_10.md`
 - **Phase 2** (hardening + features): `step_11.md` through `step_17.md`
+- **Phase 3** (performance): `step_18.md`
