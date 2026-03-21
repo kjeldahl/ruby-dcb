@@ -737,3 +737,142 @@ bottleneck (DecisionModel.build), delivering 3.7x improvement over baseline.
 normalized schema over denormalized. It's faster for the dominant workload
 (decision model reads), uses less storage, and the tag lookup table opens
 the door to application-level tag ID caching for even faster writes.
+
+---
+
+## Experiment 11: Tag IDs in array on events (no join table)
+
+**Hypothesis:** Combine the best of both worlds — keep the single-table array
+approach (no JOINs) but use integer tag IDs instead of text strings. A
+`tags(id, value)` lookup table maps tag values to integer IDs, and
+`events.tag_ids BIGINT[]` with a GIN index replaces `events.tags TEXT[]`.
+This should give smaller GIN indexes and faster array containment (`@>`)
+comparisons since integers are cheaper to compare than variable-length strings.
+
+### Schema
+
+```sql
+CREATE TABLE tags (
+  id    BIGSERIAL PRIMARY KEY,
+  value TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE events (
+  ...
+  tag_ids  BIGINT[] NOT NULL DEFAULT '{}',
+  ...
+);
+CREATE INDEX idx_events_tag_ids ON events USING GIN (tag_ids);
+```
+
+Queries use `tag_ids @> ARRAY[42]::bigint[]` instead of `tags @> '{course:course-0}'::text[]`.
+Tag value → ID resolution happens in the application layer (cacheable).
+
+### Baseline on this machine
+
+Dataset: 100k students, 500 courses, 500k events, 50 iterations.
+
+| Operation | p50 | p90 | p99 | stddev |
+|-----------|-----|-----|-----|--------|
+| Read single course (GIN) | 9.24ms | 12.85ms | 16.16ms | 1.93ms |
+| Read single student (GIN) | 4.99ms | 6.51ms | 6.67ms | 0.76ms |
+| Student+course intersection | 7.57ms | 8.96ms | 9.25ms | 0.60ms |
+| DM.build (5 proj, fixed) | 31.72ms | 33.27ms | 34.86ms | 1.32ms |
+| DM.build (random) | 35.57ms | 40.01ms | 41.27ms | 2.96ms |
+| Condition check | 0.37ms | 0.50ms | 1.36ms | 0.21ms |
+
+### Results
+
+#### Read performance (p50)
+
+| Query | Array TEXT[] (A) | Norm join (B) | IDs array (C) | IDs+resolve |
+|-------|-----------------|---------------|---------------|-------------|
+| Single course (~1000 events) | 9.24ms | **6.81ms** | 10.18ms | — |
+| Single student (5 events) | 4.99ms | **0.51ms** | 5.06ms | — |
+| Student+course intersection | 7.57ms | **3.52ms** | 6.61ms | — |
+| Decision model (fixed) | 31.72ms | **8.80ms** | 22.36ms | 24.15ms |
+| Decision model (random) | 35.57ms | **10.82ms** | 27.10ms | 24.19ms |
+| Condition check | 0.37ms | 1.47ms | **0.32ms** | — |
+
+#### Storage
+
+| | TEXT[] array (A) | Norm join (B) | IDs array (C) |
+|---|---|---|---|
+| Events table | 166 MB | 111 MB | 146 MB |
+| Tags lookup | — | 22 MB | 22 MB |
+| Event_tags table | — | 107 MB | — |
+| **Combined total** | **166 MB** | **239 MB** | **167 MB** |
+
+#### GIN index size
+
+| Schema | GIN index | Size |
+|--------|-----------|------|
+| TEXT[] array | GIN (tags) | 15 MB |
+| IDs array | GIN (tag_ids) | **12 MB** |
+
+### Analysis
+
+**Decision model reads are 1.4x faster than TEXT[] baseline** (22.36ms vs
+31.72ms). The improvement comes from the GIN index operating on integers
+instead of variable-length text. Integer comparisons during bitmap index
+scans are cheaper, and the smaller GIN index (12 MB vs 15 MB) means better
+cache utilization.
+
+**But 2.5x slower than the normalized join table** (22.36ms vs 8.80ms).
+The join table approach with UNION queries wins decisively because btree
+index lookups on `tag_id` for exact equality are fundamentally faster than
+GIN array containment checks. GIN must build and merge bitmaps for each
+`@>` condition; btree just does a direct lookup.
+
+**Single-tag lookups show no improvement.** Single course (10.18ms vs
+9.24ms) and single student (5.06ms vs 4.99ms) are essentially the same.
+The GIN overhead dominates regardless of whether the array contains
+integers or strings — the bitmap scan mechanics are the same.
+
+**Intersection is slightly faster** (6.61ms vs 7.57ms, 13% improvement).
+The two-element integer array containment is marginally cheaper than
+two-element text array containment.
+
+**Condition checks are the fastest** of all schemas (0.32ms). With
+pre-cached tag IDs, the integer GIN check after `max_position` is very
+efficient. This beats both the TEXT[] array (0.37ms) and the normalized
+join table (1.47ms) because there are no JOINs and integer comparison
+is fast.
+
+**Storage is nearly identical to TEXT[] array** (167 MB vs 166 MB). The
+events table shrinks (146 MB vs 166 MB) because BIGINT arrays are smaller
+than TEXT arrays, but the 22 MB tags lookup table offsets the savings.
+This is dramatically better than the normalized join table (239 MB).
+
+**Seeding is 3.8x faster than join table approaches** (7.4s vs 28s).
+No join table to populate — just the events table with integer arrays.
+
+### Verdict
+
+**The IDs array approach is a middle ground: modest read improvement with
+no storage penalty.**
+
+| | TEXT[] (A) | Norm join (B) | IDs array (C) |
+|---|---|---|---|
+| DM reads | 31.72ms | **8.80ms** | 22.36ms |
+| Condition check | 0.37ms | 1.47ms | **0.32ms** |
+| Storage | 166 MB | 239 MB | **167 MB** |
+| Insert complexity | Simple | Complex (3 tables) | Medium (resolve IDs) |
+| Query complexity | Simple (@>) | Complex (JOINs) | Simple (@>) |
+
+**Trade-offs:**
+- **Pro:** Same storage as TEXT[] array (167 MB vs 166 MB)
+- **Pro:** Same simple query pattern (`@>` containment, no JOINs)
+- **Pro:** Fastest condition checks (0.32ms)
+- **Pro:** Fast seeding/inserts (no join table to maintain)
+- **Pro:** 1.4x faster decision model reads vs TEXT[]
+- **Con:** 2.5x slower decision model reads vs normalized join table
+- **Con:** Requires tag value → ID resolution layer (cacheable but adds complexity)
+- **Con:** Single-tag lookups show no improvement over TEXT[]
+- **Con:** Integer tag IDs are opaque — requires lookup for debugging/inspection
+
+**Recommendation:** If storage is a constraint and query simplicity is valued,
+the IDs array is a sensible incremental improvement over TEXT[] arrays. But
+if read performance on DecisionModel.build is the priority (and it is — it's
+the #1 bottleneck), the normalized join table (Exp 10) remains the clear
+winner at 8.80ms vs 22.36ms, despite the storage and complexity trade-offs.
