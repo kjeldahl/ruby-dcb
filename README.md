@@ -137,10 +137,12 @@ Uses PostgreSQL `LISTEN/NOTIFY` with catch-up reads.
 ## Tests
 
 ```bash
-bundle exec rake
+bundle exec rake                                    # all tests
+bundle exec mutant run                              # mutation testing (all subjects)
+bundle exec mutant run 'DcbEventStore::Store#append' # single method
 ```
 
-77 tests covering unit, integration, and concurrency scenarios (20-thread races, retry-after-conflict, event count integrity under 50-thread load).
+87 tests covering unit, integration, and concurrency scenarios (20-thread races, retry-after-conflict, event count integrity under 50-thread load). Mutation testing via [mutant](https://github.com/mbj/mutant) verifies test effectiveness.
 
 ## Examples
 

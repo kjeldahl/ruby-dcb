@@ -6,6 +6,7 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a Post
 - Ruby >= 3.3, `pg` gem
 - Minitest for tests
 - SimpleCov for coverage
+- Mutant (`mutant-minitest`) for mutation testing
 
 ## Project structure
 - `lib/dcb_event_store/` - core classes
@@ -22,6 +23,8 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a Post
 ```sh
 bundle exec rake test          # all tests
 bundle exec ruby test/integration/test_client.rb  # single file
+bundle exec mutant run                            # mutation testing (all subjects)
+bundle exec mutant run 'DcbEventStore::Store#append'  # single method
 ```
 
 ## Key architecture

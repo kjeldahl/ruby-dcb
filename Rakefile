@@ -5,4 +5,9 @@ Rake::TestTask.new do |t|
   t.warning = false
 end
 
+desc "Run mutation tests"
+task :mutant do
+  sh "bundle exec mutant run"
+end
+
 task default: :test

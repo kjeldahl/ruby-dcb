@@ -2,6 +2,8 @@ require_relative "../test_helper"
 require_relative "../support/database"
 
 class TestUpcasterIntegration < Minitest::Test
+  cover "DcbEventStore::Upcaster*"
+
   include DatabaseHelper
 
   def setup

@@ -2,6 +2,8 @@ require_relative "../test_helper"
 require_relative "../support/database"
 
 class TestSubscribe < Minitest::Test
+  cover "DcbEventStore::Store#subscribe"
+
   include DatabaseHelper
 
   def setup

@@ -1,6 +1,8 @@
 require_relative "../test_helper"
 
 class TestEvent < Minitest::Test
+  cover "DcbEventStore::Event*"
+
   def test_creates_with_defaults
     e = DcbEventStore::Event.new(type: "Foo")
     assert_equal "Foo", e.type
