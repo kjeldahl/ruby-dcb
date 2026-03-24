@@ -2,6 +2,8 @@ require_relative "../test_helper"
 require "securerandom"
 
 class TestProjection < Minitest::Test
+  cover "DcbEventStore::Projection*"
+
   def test_fold_no_events_returns_initial
     p = build_counter_projection
     assert_equal 0, p.fold([])

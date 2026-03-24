@@ -1,6 +1,9 @@
 require_relative "../test_helper"
 
 class TestQuery < Minitest::Test
+  cover "DcbEventStore::Query*"
+  cover "DcbEventStore::QueryItem*"
+
   def test_query_item_creation
     qi = DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t:1"])
     assert_equal %w[A B], qi.event_types

@@ -1,6 +1,8 @@
 require_relative "../test_helper"
 
 class TestUpcaster < Minitest::Test
+  cover "DcbEventStore::Upcaster*"
+
   def test_no_transformers_returns_same
     u = DcbEventStore::Upcaster.new
     data, version = u.upcast("Foo", {x: 1}, 1)

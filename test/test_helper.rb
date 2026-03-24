@@ -28,4 +28,5 @@ SimpleCov.start do
 end
 
 require "minitest/autorun"
+require "mutant/minitest/coverage"
 require "dcb_event_store"

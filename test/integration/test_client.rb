@@ -3,6 +3,8 @@ require_relative "../support/database"
 require "securerandom"
 
 class TestClientIntegration < Minitest::Test
+  cover "DcbEventStore::Client*"
+
   include DatabaseHelper
 
   def setup

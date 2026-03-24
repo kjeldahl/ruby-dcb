@@ -1,6 +1,8 @@
 require_relative "../test_helper"
 
 class TestClient < Minitest::Test
+  cover "DcbEventStore::Client*"
+
   FakeStore = Struct.new(:appended) do
     def initialize
       super([])

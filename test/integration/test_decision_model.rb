@@ -2,6 +2,8 @@ require_relative "../test_helper"
 require_relative "../support/database"
 
 class TestDecisionModel < Minitest::Test
+  cover "DcbEventStore::DecisionModel*"
+
   include DatabaseHelper
 
   def setup

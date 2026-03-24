@@ -1,0 +1,29 @@
+integration: minitest
+requires:
+  - ./lib/dcb_event_store
+  - ./test/test_helper
+  - ./test/unit/test_event
+  - ./test/unit/test_query
+  - ./test/unit/test_projection
+  - ./test/unit/test_upcaster
+  - ./test/unit/test_client
+  - ./test/integration/test_store_append
+  - ./test/integration/test_store_read
+  - ./test/integration/test_read_from
+  - ./test/integration/test_subscribe
+  - ./test/integration/test_client
+  - ./test/integration/test_decision_model
+  - ./test/integration/test_upcaster_integration
+jobs: 1
+usage: opensource
+matcher:
+  subjects:
+    - DcbEventStore::Event*
+    - DcbEventStore::Query*
+    - DcbEventStore::QueryItem*
+    - DcbEventStore::AppendCondition*
+    - DcbEventStore::Projection*
+    - DcbEventStore::DecisionModel*
+    - DcbEventStore::Upcaster*
+    - DcbEventStore::Client*
+    - DcbEventStore::Store*
