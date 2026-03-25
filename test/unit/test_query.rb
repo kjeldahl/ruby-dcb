@@ -27,6 +27,17 @@ class TestQuery < Minitest::Test
     assert_equal items, q.items
   end
 
+  def test_query_items_frozen
+    q = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    assert q.items.frozen?
+  end
+
+  def test_query_coerces_single_item_to_array
+    qi = DcbEventStore::QueryItem.new(event_types: ["A"])
+    q = DcbEventStore::Query.new(qi)
+    assert_equal [qi], q.items
+  end
+
   def test_query_all_is_match_all
     assert DcbEventStore::Query.all.match_all?
   end
@@ -34,6 +45,22 @@ class TestQuery < Minitest::Test
   def test_regular_query_not_match_all
     q = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
     refute q.match_all?
+  end
+
+  def test_equal_queries
+    items = [DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["t:1"])]
+    assert_equal DcbEventStore::Query.new(items), DcbEventStore::Query.new(items)
+  end
+
+  def test_different_queries_not_equal
+    a = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    b = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["B"])])
+    refute_equal a, b
+  end
+
+  def test_query_not_equal_to_non_query
+    q = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    refute_equal q, "not a query"
   end
 
   def test_append_condition_defaults_after_nil
