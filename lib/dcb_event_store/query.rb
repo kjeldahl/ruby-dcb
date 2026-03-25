@@ -11,20 +11,16 @@ module DcbEventStore
   class Query
     attr_reader :items
 
-    def initialize(items)
+    def initialize(items = nil)
       @items = Array(items).freeze
     end
 
-    def self.all
-      new([])
-    end
+    def self.all = new
 
-    def match_all?
-      @items.empty?
-    end
+    def match_all? = @items.empty?
 
     def ==(other)
-      other.is_a?(Query) && other.items == @items
+      other.instance_of?(Query) && other.items == @items
     end
   end
 end
