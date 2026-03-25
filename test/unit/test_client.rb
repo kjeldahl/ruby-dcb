@@ -109,4 +109,29 @@ class TestClient < Minitest::Test
     ctx.append(DcbEventStore::Event.new(type: "X"), :some_condition)
     assert_equal :some_condition, store.appended.first[:condition]
   end
+
+  def test_stamp_preserves_data_and_id
+    store = FakeStore.new
+    ctx = DcbEventStore::Client.new(store, correlation_id: "c")
+
+    ctx.append(DcbEventStore::Event.new(type: "Foo", data: { "k" => "v" }, id: "my-id"))
+
+    stamped = store.appended.first[:events].first
+    assert_equal({ "k" => "v" }, stamped.data)
+    assert_equal "my-id", stamped.id
+  end
+
+  def test_append_accepts_array_of_events
+    store = FakeStore.new
+    ctx = DcbEventStore::Client.new(store)
+
+    events = [
+      DcbEventStore::Event.new(type: "A"),
+      DcbEventStore::Event.new(type: "B")
+    ]
+    ctx.append(events)
+
+    assert_equal 2, store.appended.first[:events].size
+    assert_equal %w[A B], store.appended.first[:events].map(&:type)
+  end
 end
