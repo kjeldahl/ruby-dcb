@@ -2,6 +2,8 @@ require_relative "../test_helper"
 require_relative "../support/database"
 require "concurrent"
 
+return if defined?(Mutant)
+
 class TestConcurrentAppend < Minitest::Test
   include DatabaseHelper
 

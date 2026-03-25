@@ -27,6 +27,6 @@ SimpleCov.start do
   end
 end
 
-require "minitest/autorun"
+require "minitest/autorun" unless defined?(Mutant)
 require "mutant/minitest/coverage"
 require "dcb_event_store"
