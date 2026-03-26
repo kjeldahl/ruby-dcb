@@ -98,10 +98,10 @@ class TestDecisionModel < Minitest::Test
 
   def test_filters_by_tag
     @store.append([
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"]),
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:b"]),
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])
-    ])
+                    DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"]),
+                    DcbEventStore::Event.new(type: "Increment", tags: ["counter:b"]),
+                    DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store,
                                                 count: counter_projection("counter:a"))
@@ -115,20 +115,20 @@ class TestDecisionModel < Minitest::Test
     proj_x = DcbEventStore::Projection.new(
       initial_state: 0, handlers: both_handler,
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["X"], tags: ["t:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["X"], tags: ["t:1"])
+                                      ])
     )
     proj_y = DcbEventStore::Projection.new(
       initial_state: 0, handlers: both_handler,
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Y"], tags: ["t:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Y"], tags: ["t:1"])
+                                      ])
     )
 
     @store.append([
-      DcbEventStore::Event.new(type: "X", tags: ["t:1"]),
-      DcbEventStore::Event.new(type: "Y", tags: ["t:1"])
-    ])
+                    DcbEventStore::Event.new(type: "X", tags: ["t:1"]),
+                    DcbEventStore::Event.new(type: "Y", tags: ["t:1"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store, x: proj_x, y: proj_y)
     assert_equal 1, result.states[:x]
@@ -141,17 +141,17 @@ class TestDecisionModel < Minitest::Test
         initial_state: 0,
         handlers: { "Evt" => ->(s, _e) { s + 1 } },
         query: DcbEventStore::Query.new([
-          DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: [tag])
-        ])
+                                          DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: [tag])
+                                        ])
       )
     }
 
     @store.append([
-      DcbEventStore::Event.new(type: "Evt", tags: ["x:a"]),
-      DcbEventStore::Event.new(type: "Evt", tags: ["x:b"]),
-      DcbEventStore::Event.new(type: "Evt", tags: ["x:a", "x:b"]),
-      DcbEventStore::Event.new(type: "Other", tags: ["x:a"])
-    ])
+                    DcbEventStore::Event.new(type: "Evt", tags: ["x:a"]),
+                    DcbEventStore::Event.new(type: "Evt", tags: ["x:b"]),
+                    DcbEventStore::Event.new(type: "Evt", tags: ["x:a", "x:b"]),
+                    DcbEventStore::Event.new(type: "Other", tags: ["x:a"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store,
                                                 a: make_proj.call("x:a"),
@@ -163,9 +163,9 @@ class TestDecisionModel < Minitest::Test
 
   def test_combined_query_includes_all_projection_items
     @store.append([
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"]),
-      DcbEventStore::Event.new(type: "Increment", tags: ["counter:b"])
-    ])
+                    DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"]),
+                    DcbEventStore::Event.new(type: "Increment", tags: ["counter:b"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store,
                                                 a: counter_projection("counter:a"),
@@ -190,16 +190,16 @@ class TestDecisionModel < Minitest::Test
       initial_state: 0,
       handlers: { "A" => ->(s, _e) { s + 1 }, "B" => ->(s, _e) { s + 10 } },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["x:1"]),
-        DcbEventStore::QueryItem.new(event_types: ["B"], tags: ["x:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["x:1"]),
+                                        DcbEventStore::QueryItem.new(event_types: ["B"], tags: ["x:1"])
+                                      ])
     )
 
     @store.append([
-      DcbEventStore::Event.new(type: "A", tags: ["x:1"]),
-      DcbEventStore::Event.new(type: "B", tags: ["x:1"]),
-      DcbEventStore::Event.new(type: "C", tags: ["x:1"])
-    ])
+                    DcbEventStore::Event.new(type: "A", tags: ["x:1"]),
+                    DcbEventStore::Event.new(type: "B", tags: ["x:1"]),
+                    DcbEventStore::Event.new(type: "C", tags: ["x:1"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store, total: proj)
     assert_equal 11, result.states[:total]
@@ -210,21 +210,21 @@ class TestDecisionModel < Minitest::Test
       initial_state: 0,
       handlers: { "A" => ->(s, _e) { s + 1 }, "B" => ->(s, _e) { s + 1 } },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: [], tags: ["x:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: [], tags: ["x:1"])
+                                      ])
     )
     specific_proj = DcbEventStore::Projection.new(
       initial_state: 0,
       handlers: { "A" => ->(s, _e) { s + 1 } },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["x:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["x:1"])
+                                      ])
     )
 
     @store.append([
-      DcbEventStore::Event.new(type: "A", tags: ["x:1"]),
-      DcbEventStore::Event.new(type: "B", tags: ["x:1"])
-    ])
+                    DcbEventStore::Event.new(type: "A", tags: ["x:1"]),
+                    DcbEventStore::Event.new(type: "B", tags: ["x:1"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store,
                                                 wild: wildcard_proj,
@@ -239,21 +239,21 @@ class TestDecisionModel < Minitest::Test
     proj_ab = DcbEventStore::Projection.new(
       initial_state: 0, handlers: handler,
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["a:1", "b:2"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["a:1", "b:2"])
+                                      ])
     )
     proj_a = DcbEventStore::Projection.new(
       initial_state: 0, handlers: handler,
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["a:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["a:1"])
+                                      ])
     )
 
     @store.append([
-      DcbEventStore::Event.new(type: "Evt", tags: ["a:1", "b:2", "c:3"]),
-      DcbEventStore::Event.new(type: "Evt", tags: ["a:1"]),
-      DcbEventStore::Event.new(type: "Evt", tags: ["a:1", "b:2"])
-    ])
+                    DcbEventStore::Event.new(type: "Evt", tags: ["a:1", "b:2", "c:3"]),
+                    DcbEventStore::Event.new(type: "Evt", tags: ["a:1"]),
+                    DcbEventStore::Event.new(type: "Evt", tags: ["a:1", "b:2"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store, ab: proj_ab, a: proj_a)
     assert_equal 2, result.states[:ab]
@@ -265,21 +265,21 @@ class TestDecisionModel < Minitest::Test
       initial_state: 0,
       handlers: { "Evt" => ->(s, _e) { s + 1 } },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: [])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: [])
+                                      ])
     )
     tagged_proj = DcbEventStore::Projection.new(
       initial_state: 0,
       handlers: { "Evt" => ->(s, _e) { s + 1 } },
       query: DcbEventStore::Query.new([
-        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["a:1"])
-      ])
+                                        DcbEventStore::QueryItem.new(event_types: ["Evt"], tags: ["a:1"])
+                                      ])
     )
 
     @store.append([
-      DcbEventStore::Event.new(type: "Evt", tags: ["a:1"]),
-      DcbEventStore::Event.new(type: "Evt", tags: ["b:2"])
-    ])
+                    DcbEventStore::Event.new(type: "Evt", tags: ["a:1"]),
+                    DcbEventStore::Event.new(type: "Evt", tags: ["b:2"])
+                  ])
 
     result = DcbEventStore::DecisionModel.build(@store,
                                                 all: wildcard_tags_proj,
@@ -290,38 +290,14 @@ class TestDecisionModel < Minitest::Test
 
   private
 
-  def counter_projection(tag)
-    DcbEventStore::Projection.new(
-      initial_state: 0,
-      handlers: { "Increment" => ->(state, _e) { state + 1 } },
-      query: DcbEventStore::Query.new([
-                                        DcbEventStore::QueryItem.new(event_types: ["Increment"], tags: [tag])
-                                      ])
-    )
+  def build_projection(type, tag, initial: 0, &handler)
+    handler ||= ->(s, _e) { s + 1 }
+    qi = DcbEventStore::QueryItem.new(event_types: [type], tags: [tag])
+    DcbEventStore::Projection.new(initial_state: initial, handlers: { type => handler },
+                                  query: DcbEventStore::Query.new([qi]))
   end
 
-  def capacity_projection(course_tag)
-    DcbEventStore::Projection.new(
-      initial_state: 0,
-      handlers: {
-        "CourseDefined" => ->(_, e) { e.data[:capacity] }
-      },
-      query: DcbEventStore::Query.new([
-                                        DcbEventStore::QueryItem.new(event_types: ["CourseDefined"], tags: [course_tag])
-                                      ])
-    )
-  end
-
-  def subscription_count_projection(course_tag)
-    DcbEventStore::Projection.new(
-      initial_state: 0,
-      handlers: {
-        "StudentSubscribed" => ->(state, _e) { state + 1 }
-      },
-      query: DcbEventStore::Query.new([
-                                        DcbEventStore::QueryItem.new(event_types: ["StudentSubscribed"],
-                                                                     tags: [course_tag])
-                                      ])
-    )
-  end
+  def counter_projection(tag) = build_projection("Increment", tag)
+  def capacity_projection(tag) = build_projection("CourseDefined", tag) { |_, e| e.data[:capacity] }
+  def subscription_count_projection(tag) = build_projection("StudentSubscribed", tag)
 end

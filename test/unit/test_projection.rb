@@ -50,7 +50,10 @@ class TestProjection < Minitest::Test
     events = []
     proj = DcbEventStore::Projection.new(
       initial_state: nil,
-      handlers: { "Ping" => ->(_state, event) { events << event; nil } },
+      handlers: { "Ping" => ->(_state, event) {
+        events << event
+        nil
+      } },
       query: DcbEventStore::Query.all
     )
     event = make_event(sequence_position: 1, type: "Ping")
