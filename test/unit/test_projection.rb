@@ -40,6 +40,27 @@ class TestProjection < Minitest::Test
     assert_equal ["Increment"], p.event_types
   end
 
+  def test_query_accessor
+    p = build_counter_projection
+    refute_nil p.query
+    assert_instance_of DcbEventStore::Query, p.query
+  end
+
+  def test_handler_receives_event
+    events = []
+    proj = DcbEventStore::Projection.new(
+      initial_state: nil,
+      handlers: { "Ping" => ->(_state, event) {
+        events << event
+        nil
+      } },
+      query: DcbEventStore::Query.all
+    )
+    event = make_event(sequence_position: 1, type: "Ping")
+    proj.fold([event])
+    assert_equal [event], events
+  end
+
   private
 
   def make_event(sequence_position:, type:, data: {}, tags: [])
