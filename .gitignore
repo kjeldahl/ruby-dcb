@@ -1,3 +1,5 @@
 /.ruby-lsp/
 /coverage/
+/.air/
+/coverage/
 Gemfile.lock
