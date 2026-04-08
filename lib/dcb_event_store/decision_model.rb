@@ -6,7 +6,7 @@ module DcbEventStore
       combined_items = projections.values.flat_map { |p| p.query.items }
       combined_query = Query.new(combined_items)
 
-      events = store.read(combined_query).to_a
+      events = store.read(combined_query)
 
       states = {}
       projections.each do |name, projection|
@@ -27,7 +27,7 @@ module DcbEventStore
     def self.matches_projection?(projection, event)
       projection.query.items.any? do |item|
         type_match = item.event_types.empty? || item.event_types.include?(event.type)
-        tag_match = item.tags.empty? || item.tags.all? { |t| event.tags.include?(t) }
+        tag_match = item.tags.all? { |t| event.tags.include?(t) }
         type_match && tag_match
       end
     end
