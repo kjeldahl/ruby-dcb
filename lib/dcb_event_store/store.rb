@@ -180,19 +180,7 @@ module DcbEventStore
 
     def append_with_condition(events, condition)
       cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
-
-      value_rows = []
-      insert_params = []
-      events.each do |event|
-        offset = cond_params.size + insert_params.size
-        value_rows << "($#{offset + 1}::uuid, $#{offset + 2}::text, $#{offset + 3}::jsonb, " \
-                      "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
-        insert_params.push(
-          event.id, event.type, JSON.generate(event.data),
-          "{#{event.tags.join(',')}}",
-          event.causation_id, event.correlation_id, 1
-        )
-      end
+      value_rows, insert_params = build_values_clause(events, cond_params.size)
 
       result = @conn.exec_params(
         <<~SQL,
@@ -210,13 +198,30 @@ module DcbEventStore
       if result.ntuples.zero? && events.any?
         check = @conn.exec_params(cond_sql, cond_params)
         raise ConditionNotMet, "conflicting event(s)" if check[0]["count"].to_i.positive?
+
         return []
       end
 
-      events_by_id = events.each_with_object({}) { |e, h| h[e.id] = e }
+      events_by_id = events.to_h { |e| [e.id, e] }
       result.map do |row|
         row_to_appended_event(events_by_id[row["event_id"]], row)
       end
+    end
+
+    def build_values_clause(events, param_offset)
+      value_rows = []
+      insert_params = []
+      events.each do |event|
+        offset = param_offset + insert_params.size
+        value_rows << "($#{offset + 1}::uuid, $#{offset + 2}::text, $#{offset + 3}::jsonb, " \
+                      "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
+        insert_params.push(
+          event.id, event.type, JSON.generate(event.data),
+          "{#{event.tags.join(',')}}",
+          event.causation_id, event.correlation_id, 1
+        )
+      end
+      [value_rows, insert_params]
     end
 
     def append_without_condition(events)
