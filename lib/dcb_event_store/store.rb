@@ -179,15 +179,44 @@ module DcbEventStore
     end
 
     def append_with_condition(events, condition)
-      # Check condition once before inserting any events
-      check_condition!(condition)
-      append_without_condition(events)
-    end
-
-    def check_condition!(condition)
       cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
-      result = @conn.exec_params(cond_sql, cond_params)
-      raise ConditionNotMet, "#{result[0]['count'].to_i} conflicting event(s)" if result[0]["count"].to_i.positive?
+
+      value_rows = []
+      insert_params = []
+      events.each do |event|
+        offset = cond_params.size + insert_params.size
+        value_rows << "($#{offset + 1}::uuid, $#{offset + 2}::text, $#{offset + 3}::jsonb, " \
+                      "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
+        insert_params.push(
+          event.id, event.type, JSON.generate(event.data),
+          "{#{event.tags.join(',')}}",
+          event.causation_id, event.correlation_id, 1
+        )
+      end
+
+      result = @conn.exec_params(
+        <<~SQL,
+          WITH cond AS (#{cond_sql})
+          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          SELECT v.* FROM (VALUES #{value_rows.join(', ')})
+            AS v(event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
+          ON CONFLICT (event_id) DO NOTHING
+          RETURNING event_id, sequence_position, created_at
+        SQL
+        cond_params + insert_params
+      )
+
+      if result.ntuples.zero? && events.any?
+        check = @conn.exec_params(cond_sql, cond_params)
+        raise ConditionNotMet, "conflicting event(s)" if check[0]["count"].to_i.positive?
+        return []
+      end
+
+      events_by_id = events.each_with_object({}) { |e, h| h[e.id] = e }
+      result.map do |row|
+        row_to_appended_event(events_by_id[row["event_id"]], row)
+      end
     end
 
     def append_without_condition(events)
