@@ -1,0 +1,1 @@
+{"type":"config","name":"Optimize DecisionModel.build - single-pass event processing","metricName":"decision_model_ms","metricUnit":"ms","bestDirection":"lower"}
