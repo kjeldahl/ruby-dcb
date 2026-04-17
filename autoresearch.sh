@@ -7,4 +7,4 @@ cd /Users/jacob/Dev/tries/2026-03-05-ruby-dcb
 ruby -c lib/dcb_event_store/decision_model.rb >/dev/null 2>&1
 
 # Run the benchmark focused on DecisionModel.build timing
-bundle exec ruby experiments/decision_model_bench.rb
+bundle exec ruby experiments/condition_check_bench.rb
