@@ -43,8 +43,16 @@ The `DecisionModel.build` method currently iterates through all events **once pe
 - All tests pass (105 runs, 190 assertions, 0 failures)
 
 ### Ideas for Further Optimization
-1. Pre-compute event type index for faster type-based filtering
-2. Batch SQL reads instead of single combined query
-3. Cache compiled SQL queries
-4. Optimize JSON parsing in row_to_sequenced_event
-5. Use prepared statements for repeated queries
+1. **SQL-level optimization**: The SQL query is now the bottleneck (~27ms vs ~0.1ms for Ruby). Consider:
+   - Simplifying query structure
+   - Using prepared statements
+   - Optimizing index usage
+2. **Row parsing optimization**: `row_to_sequenced_event` does JSON parse, Time parse, and array parse for every row
+3. **Stream events instead of loading into memory**: Avoid `.to_a` call, stream directly to projections
+
+### Final Summary
+- DecisionModel.build optimization achieved **5x speedup** on Ruby processing
+- Before: ~150ms total (dominated by Ruby multi-pass iteration)
+- After: ~27ms total (SQL query is now the bottleneck, not Ruby)
+- All tests pass (105 runs, 190 assertions, 0 failures)
+- API compatibility maintained (no changes to public interface)
