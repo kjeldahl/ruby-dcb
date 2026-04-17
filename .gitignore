@@ -1,4 +1,5 @@
 /.ruby-lsp/
+/.bundle/
 /coverage/
 /.air/
 /coverage/
