@@ -6,8 +6,8 @@ require_relative '../lib/dcb_event_store'
 require 'pg'
 require 'securerandom'
 
-num_students = 5000
-num_courses = 50
+num_students = 10000
+num_courses = 100
 
 conn = PG.connect(dbname: 'dcb_event_store_test')
 conn.exec(%q{SET client_min_messages TO warning})

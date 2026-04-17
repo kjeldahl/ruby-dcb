@@ -1,1 +1,2 @@
 {"type":"config","name":"Optimize DecisionModel.build - single-pass event processing","metricName":"decision_model_ms","metricUnit":"ms","bestDirection":"lower"}
+{"run":1,"commit":"a276b74","metric":0.96,"metrics":{"decision_model_ms":0.96},"status":"keep","description":"Baseline: DecisionModel.build with 5 projections on ~2500 events takes ~1ms","timestamp":1776418052173,"segment":0,"confidence":null,"iterationTokens":5372,"asi":{"events":2500,"projections":5,"dataset":"5k students, 50 courses"}}
