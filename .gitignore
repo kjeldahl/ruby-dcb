@@ -3,3 +3,5 @@
 /.air/
 /coverage/
 Gemfile.lock
+/experiments/
+/.idea/
