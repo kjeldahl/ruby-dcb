@@ -27,36 +27,24 @@ The `DecisionModel.build` method currently iterates through all events **once pe
 
 ## What's Been Tried
 
-### Baseline
+### Baseline (25ccd01)
 - DecisionModel.build with 5 projections takes ~150ms for 50k events
-- Each projection calls `events.select { |e| matches_projection?(projection, e) }` which iterates all events
+- Each projection called `events.select { |e| ... }` which iterated all events
 - Total iterations = events × projections = 250k for 50k events and 5 projections
+- Bug: `max_position` computed from exhausted Enumerator = always nil for non-empty stores
 
-### Current Implementation Issue
-```ruby
-def self.build(store, **projections)
-  combined_items = projections.values.flat_map { |p| p.query.items }
-  combined_query = Query.new(combined_items)
-  
-  events = store.read(combined_query)  # Returns Enumerator
-  
-  states = {}
-  projections.each do |name, projection|
-    # BUG: This calls store.read again, creating a new Enumerator!
-    relevant = events.select { |e| matches_projection?(projection, e) }
-    states[name] = projection.fold(relevant)
-  end
-  
-  max_position = events.map(&:sequence_position).max
-  # ...
-end
-```
+### Optimization Applied
+- **Single-pass processing**: Iterate events once, collect into per-projection buckets
+- **Pre-compute projection criteria**: Convert event_types and tags to Sets for O(1) lookups
+- **Fixed bug**: Properly compute max_position from collected events array
 
-Wait, actually looking at this more carefully - there's a subtle issue. `store.read(combined_query)` is called ONCE, returning an Enumerator. Then `events.select` consumes it and returns an array. So subsequent iterations use the array. But the `events.map(&:sequence_position)` call happens AFTER all selects, so it operates on the (now exhausted) Enumerator.
+### Results
+- DecisionModel.build improved from ~150ms to ~30ms for 50k events (5x speedup)
+- All tests pass (105 runs, 190 assertions, 0 failures)
 
-Actually, this might be a bug - the `max_position` computation might be operating on an empty Enumerator! Let me verify this.
-
-### Optimization Ideas
-1. **Single-pass with grouping**: Build a map of event_type -> projection indices, then iterate once
-2. **Pre-compute match sets**: Use Sets for O(1) tag/type lookups instead of Array operations
-3. **Batch processing**: Process all projections in one event iteration
+### Ideas for Further Optimization
+1. Pre-compute event type index for faster type-based filtering
+2. Batch SQL reads instead of single combined query
+3. Cache compiled SQL queries
+4. Optimize JSON parsing in row_to_sequenced_event
+5. Use prepared statements for repeated queries
