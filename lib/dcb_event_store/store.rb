@@ -96,40 +96,10 @@ module DcbEventStore
     private
 
     def build_read_sql(query, after: nil)
-      if query.match_all?
-        return ["SELECT * FROM events WHERE sequence_position > $1 ORDER BY sequence_position ASC", [after]] if after
-
-        return ["SELECT * FROM events ORDER BY sequence_position ASC", []]
-
-      end
-
-      clauses = []
-      params = []
-
-      query.items.each do |item|
-        parts = []
-
-        unless item.event_types.empty?
-          params << to_pg_array(item.event_types)
-          parts << "type = ANY($#{params.size}::text[])"
-        end
-
-        unless item.tags.empty?
-          params << to_pg_array(item.tags)
-          parts << "tags @> $#{params.size}::text[]"
-        end
-
-        clauses << "(#{parts.join(' AND ')})" unless parts.empty?
-      end
-
-      where = clauses.join(" OR ")
-
-      if after
-        params << after
-        where = "(#{where}) AND sequence_position > $#{params.size}"
-      end
-
-      sql = "SELECT * FROM events WHERE #{where} ORDER BY sequence_position ASC"
+      where, params = build_where_clause(query, after)
+      sql = "SELECT * FROM events"
+      sql += " WHERE #{where}" if where
+      sql += " ORDER BY sequence_position ASC"
       [sql, params]
     end
 
@@ -257,32 +227,16 @@ module DcbEventStore
     end
 
     def build_condition_sql(query, after)
-      if query.match_all?
-        return ["SELECT COUNT(*) FROM events WHERE sequence_position > $1", [after]] if after
+      where, params = build_where_clause(query, after)
+      sql = where ? "SELECT COUNT(*) FROM events WHERE #{where}" : "SELECT COUNT(*) FROM events"
+      [sql, params]
+    end
 
-        return ["SELECT COUNT(*) FROM events", []]
+    def build_where_clause(query, after)
+      return match_all_where(after) if query.match_all?
 
-      end
-
-      clauses = []
       params = []
-
-      query.items.each do |item|
-        parts = []
-
-        unless item.event_types.empty?
-          params << to_pg_array(item.event_types)
-          parts << "type = ANY($#{params.size}::text[])"
-        end
-
-        unless item.tags.empty?
-          params << to_pg_array(item.tags)
-          parts << "tags @> $#{params.size}::text[]"
-        end
-
-        clauses << "(#{parts.join(' AND ')})" unless parts.empty?
-      end
-
+      clauses = query.items.filter_map { |item| build_item_clause(item, params) }
       where = clauses.join(" OR ")
 
       if after
@@ -290,7 +244,26 @@ module DcbEventStore
         where = "(#{where}) AND sequence_position > $#{params.size}"
       end
 
-      ["SELECT COUNT(*) FROM events WHERE #{where}", params]
+      [where, params]
+    end
+
+    def match_all_where(after)
+      return ["sequence_position > $1", [after]] if after
+
+      [nil, []]
+    end
+
+    def build_item_clause(item, params)
+      parts = []
+      unless item.event_types.empty?
+        params << to_pg_array(item.event_types)
+        parts << "type = ANY($#{params.size}::text[])"
+      end
+      unless item.tags.empty?
+        params << to_pg_array(item.tags)
+        parts << "tags @> $#{params.size}::text[]"
+      end
+      parts.empty? ? nil : "(#{parts.join(' AND ')})"
     end
 
     def with_transaction
