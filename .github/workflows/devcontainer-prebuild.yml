@@ -6,6 +6,9 @@ on:
     paths:
       - ".devcontainer/**"
       - ".dockerignore"
+      - "Gemfile"
+      - "Gemfile.lock"
+      - "*.gemspec"
       - ".github/workflows/devcontainer-prebuild.yml"
   workflow_dispatch:
 

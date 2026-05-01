@@ -1,5 +1,8 @@
 FROM mcr.microsoft.com/devcontainers/ruby:3.3
 
+ENV BUNDLE_PATH=/home/vscode/.bundle
+ENV BUNDLE_FORCE_RUBY_PLATFORM=1
+
 RUN apt-get update && apt-get install -y \
     postgresql \
     postgresql-client \
@@ -34,5 +37,13 @@ RUN set -eu; \
     cat /etc/ssh/ssh_known_hosts.github >> /etc/ssh/ssh_known_hosts; \
     rm /etc/ssh/ssh_known_hosts.github
 
-ENV BUNDLE_PATH=/home/vscode/.bundle
-ENV BUNDLE_FORCE_RUBY_PLATFORM=1
+# Pre-install gems so postCreate bundle install in the workspace is a no-op.
+# The gemspec's Dir["lib/**/*.rb"] resolves to [] here; that's fine for
+# dependency resolution.
+COPY Gemfile dcb_event_store.gemspec /tmp/bundle-prep/
+RUN cd /tmp/bundle-prep \
+    && bundle lock --add-platform ruby \
+    && bundle install \
+    && cd / \
+    && rm -rf /tmp/bundle-prep \
+    && chown -R vscode:vscode /home/vscode/.bundle

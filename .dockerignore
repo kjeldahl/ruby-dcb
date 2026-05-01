@@ -1,3 +1,5 @@
 *
 !.devcontainer/Dockerfile
 !.devcontainer/devcontainer.json
+!Gemfile
+!*.gemspec
