@@ -1,7 +1,8 @@
 {
   "name": "DCB Event Store",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "context": ".."
   },
   "postStartCommand": "sudo service postgresql start || true",
   "postCreateCommand": "sudo service postgresql start && sudo sed -i 's/peer/trust/g; s/md5/trust/g' /etc/postgresql/*/main/pg_hba.conf && sudo service postgresql restart && createdb -U postgres dcb_event_store_test && bundle lock --add-platform ruby && bundle install && PGUSER=postgres bundle exec ruby -e \"require 'pg'; require_relative 'lib/dcb_event_store'; conn = PG.connect(dbname: 'dcb_event_store_test'); DcbEventStore::Schema.create!(conn)\"",
