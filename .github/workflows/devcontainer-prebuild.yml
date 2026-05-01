@@ -5,15 +5,23 @@ on:
     branches: [main]
     paths:
       - ".devcontainer/**"
-      - "Gemfile"
-      - "Gemfile.lock"
-      - "dcb_event_store.gemspec"
+      - ".dockerignore"
       - ".github/workflows/devcontainer-prebuild.yml"
   workflow_dispatch:
 
 jobs:
   prebuild:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            devpod_arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            devpod_arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -32,7 +40,7 @@ jobs:
 
       - name: Install DevPod CLI
         run: |
-          curl -L -o devpod "https://github.com/skevetter/devpod/releases/latest/download/devpod-linux-amd64"
+          curl -L -o devpod "https://github.com/skevetter/devpod/releases/latest/download/devpod-linux-${{ matrix.devpod_arch }}"
           sudo install -c -m 0755 devpod /usr/local/bin
           devpod version
 
@@ -40,9 +48,6 @@ jobs:
         run: |
           devpod provider add docker --silent || devpod provider use docker
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Build and push prebuild image
         run: |
-          devpod build . --repository ghcr.io/kjeldahl/ruby-dcb --platform linux/amd64,linux/arm64
+          devpod build . --repository ghcr.io/kjeldahl/ruby-dcb --platform ${{ matrix.platform }}
