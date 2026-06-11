@@ -45,6 +45,10 @@ Naming/VariableNumber:
 Metrics/ClassLength:
   Max: 250
 
+Metrics/ModuleLength:
+  Exclude:
+    - "test/**/*"
+
 Metrics/BlockLength:
   Max: 30
   Exclude:
