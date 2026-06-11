@@ -134,6 +134,19 @@ end
 
 Uses PostgreSQL `LISTEN/NOTIFY` with catch-up reads.
 
+### In-memory store for fast tests
+
+`InMemoryStore` is a drop-in replacement for `Store` with no PostgreSQL dependency, making application test suites (and especially mutation testing) much faster:
+
+```ruby
+store = DcbEventStore::InMemoryStore.new   # accepts upcaster: like Store
+client = DcbEventStore::Client.new(store)
+```
+
+It implements the same API and semantics — append conditions, idempotent writes, query filtering, upcasting — verified by a shared contract suite (`test/support/store_contract.rb`) that runs against both implementations, plus a side-by-side equivalence test.
+
+Limitations: it is **single-threaded** (no locking; intended for tests only), and `subscribe` does not block on `LISTEN/NOTIFY` — it catches up and then delivers matching events synchronously as they are appended.
+
 ## Tests
 
 ```bash

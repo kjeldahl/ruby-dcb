@@ -32,6 +32,7 @@ bundle exec mutant run 'DcbEventStore::Store#append'  # single method
 - `Query` / `QueryItem` - event stream filtering
 - `AppendCondition` - consistency boundary
 - `Store` - low-level PG operations
+- `InMemoryStore` - single-threaded drop-in for `Store`, for fast tests without PG (shared contract: `test/support/store_contract.rb`)
 - `Client` - high-level API (append, read, subscribe)
 - `Projection` / `DecisionModel` - higher-level abstractions
 - `Upcaster` - event schema migration on read
