@@ -36,4 +36,4 @@ bundle exec mutant run 'DcbEventStore::Store#append'  # single method
 - `Client` - high-level API (append, read, subscribe)
 - `Projection` / `DecisionModel` - higher-level abstractions
 - `Upcaster` - event schema migration on read
-- `Notifications` / `StoreInstrumentation` / `LogSubscriber` - observability: pub/sub instrumentation events (`append.dcb`, `read.dcb`, `projection.dcb`, `decision_model.dcb`) published through the global `DcbEventStore.instrumentation`
+- `Notifications` / `StoreInstrumentation` / `LogSubscriber` - observability: pub/sub instrumentation events (`append.dcb`, `read.dcb`, `subscribe.dcb`, `projection.dcb`, `decision_model.dcb`) published through the global `DcbEventStore.instrumentation`; `subscribe.dcb` carries delivery lag, per-event or batched via `subscribe_instrumentation:` store option

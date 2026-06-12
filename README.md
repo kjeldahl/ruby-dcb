@@ -158,10 +158,29 @@ Emitted events and payloads:
 | `read.dcb` | `Store#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
 | `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:` |
+| `subscribe.dcb` | `Store#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
 
 Reads are lazy enumerators, so `read.dcb` fires when the enumeration finishes (completing or exiting early via `break`/`#first`), with `event_count` reflecting the events actually yielded. Whether a read is instrumented is decided when the read is issued, and an abandoned external iterator (`#next` without exhausting) publishes nothing.
+
+#### Subscription delivery lag
+
+`subscribe.dcb` measures **delivery lag** — the wall-clock time between an event being stored (`created_at`) and its delivery to the subscriber block. It's the staleness signal for anything built on `subscribe` (projectors, read models, process managers); an alert on growing lag is the classic "consumer is falling behind" indicator. Emission granularity is configured per store:
+
+```ruby
+store = DcbEventStore::Store.new(conn)                                    # :event (default)
+store = DcbEventStore::Store.new(conn, subscribe_instrumentation: :batch) # one event per delivery round
+```
+
+- `:event` — one `subscribe.dcb` per delivered event with its `sequence_position:` and `lag:`; `event.duration` is the handler time, so transport lag and slow handlers can be told apart.
+- `:batch` — one `subscribe.dcb` per delivery round (the whole catch-up, then one per `NOTIFY` wake-up) with `event_count:`, `last_position:` and `max_lag:`; `event.duration` spans the read plus all handler calls. Use this for high-throughput subscriptions where per-event emission is too noisy.
+
+`phase:` distinguishes `:catch_up` (replaying history, where large lag is expected and shouldn't pollute live-lag metrics) from `:live` deliveries. A handler that raises publishes the event with `event.error` set before the exception propagates. Whether a delivery round is instrumented is decided per round, so subscribers attached mid-subscription observe subsequent rounds.
+
+**Clock skew caveat**: `created_at` is stamped by the PostgreSQL server clock, while lag is measured against the consumer host's clock. When these are different machines, lag absorbs any skew between them and can even come out slightly negative. Keep both hosts NTP-synced and treat lag as a trend/magnitude signal rather than a precise measurement. (The alternative — measuring from `NOTIFY` arrival — would miss time spent committed-but-undelivered, which is usually the point of the metric.)
+
+**InMemoryStore caveat**: the in-memory store delivers subscriptions synchronously on the appender's thread, so its `:live` events are published during `append` and its lag values are just in-process dispatch overhead (~0). It emits the same event shape so application tests can assert on `subscribe.dcb`, but the lag numbers are only meaningful for the PostgreSQL-backed `Store`.
 
 `DcbEventStore::LogSubscriber` is a proof-of-concept adapter that logs one line per event, and the reference for richer connectors (AppSignal, Prometheus, ...):
 
