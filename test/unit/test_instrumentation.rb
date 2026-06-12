@@ -149,6 +149,128 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
   end
 end
 
+class TestSubscribeInstrumentation < InstrumentationTestCase
+  cover "DcbEventStore::InMemoryStore*"
+  cover "DcbEventStore::StoreInstrumentation*"
+
+  def subscribe_events
+    @events.select { |event| event.name == "subscribe.dcb" }
+  end
+
+  def test_per_event_mode_emits_one_event_per_delivery_with_lag
+    store = DcbEventStore::InMemoryStore.new
+    store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+
+    query = DcbEventStore::Query.all
+    received = []
+    store.subscribe(query) { |event| received << event }
+
+    assert_equal 2, received.size
+    emitted = subscribe_events
+    assert_equal 2, emitted.size
+    assert(emitted.all? { |e| e.payload[:phase] == :catch_up })
+    assert_equal "DcbEventStore::InMemoryStore", emitted[0].payload[:store]
+    assert_same query, emitted[0].payload[:query]
+    assert_equal([1, 2], emitted.map { |e| e.payload[:sequence_position] })
+    emitted.each do |e|
+      assert_kind_of Float, e.payload[:lag]
+      assert_operator e.payload[:lag], :>=, 0
+    end
+  end
+
+  def test_per_event_mode_live_deliveries_use_live_phase
+    store = DcbEventStore::InMemoryStore.new
+    store.subscribe(DcbEventStore::Query.all) { |event| event }
+    @events.clear
+
+    store.append([DcbEventStore::Event.new(type: "A")])
+
+    emitted = subscribe_events
+    assert_equal 1, emitted.size
+    assert_equal :live, emitted[0].payload[:phase]
+    assert_equal 1, emitted[0].payload[:sequence_position]
+  end
+
+  def test_per_event_mode_handler_error_is_captured_and_propagated
+    store = DcbEventStore::InMemoryStore.new
+    store.append([DcbEventStore::Event.new(type: "A")])
+
+    error = assert_raises(RuntimeError) do
+      store.subscribe(DcbEventStore::Query.all) { |_event| raise "handler boom" }
+    end
+
+    assert_equal "handler boom", error.message
+    emitted = subscribe_events
+    assert_equal 1, emitted.size
+    assert_same error, emitted[0].error
+  end
+
+  def test_batch_mode_emits_one_event_per_delivery_round
+    store = DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :batch)
+    store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+    @events.clear
+
+    query = DcbEventStore::Query.all
+    store.subscribe(query) { |event| event }
+    store.append([DcbEventStore::Event.new(type: "C")])
+
+    emitted = subscribe_events
+    assert_equal(%i[catch_up live], emitted.map { |e| e.payload[:phase] })
+
+    catch_up = emitted[0].payload
+    assert_equal "DcbEventStore::InMemoryStore", catch_up[:store]
+    assert_equal :catch_up, catch_up[:phase]
+    assert_equal 2, catch_up[:event_count]
+    assert_equal 2, catch_up[:last_position]
+    assert_kind_of Float, catch_up[:max_lag]
+    assert_operator catch_up[:max_lag], :>=, 0
+    assert_same query, catch_up[:query]
+
+    live = emitted[1].payload
+    assert_equal 1, live[:event_count]
+    assert_equal 3, live[:last_position]
+  end
+
+  def test_batch_mode_empty_round_reports_zero_count
+    store = DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :batch)
+
+    store.subscribe(DcbEventStore::Query.all) { |event| event }
+
+    emitted = subscribe_events
+    assert_equal 1, emitted.size
+    assert_equal 0, emitted[0].payload[:event_count]
+    assert_nil emitted[0].payload[:last_position]
+    assert_nil emitted[0].payload[:max_lag]
+  end
+
+  def test_instrumentation_is_decided_per_delivery_round
+    store = DcbEventStore::InMemoryStore.new
+
+    # Nobody listening for subscribe.dcb when the subscription starts:
+    # later rounds are still instrumented once a subscriber appears.
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    store.subscribe(DcbEventStore::Query.all) { |event| event }
+
+    late = []
+    DcbEventStore.instrumentation.subscribe("subscribe.dcb") { |event| late << event }
+    store.append([DcbEventStore::Event.new(type: "A")])
+
+    assert_equal 1, late.size
+    assert_equal :live, late[0].payload[:phase]
+  end
+
+  def test_invalid_subscribe_instrumentation_mode_raises
+    error = assert_raises(ArgumentError) do
+      DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :nope)
+    end
+    assert_equal "subscribe_instrumentation must be one of [:event, :batch], got :nope", error.message
+
+    assert_raises(ArgumentError) do
+      DcbEventStore::Store.new(nil, subscribe_instrumentation: :nope)
+    end
+  end
+end
+
 class TestProjectionInstrumentation < InstrumentationTestCase
   cover "DcbEventStore::Projection*"
 

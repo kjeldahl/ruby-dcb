@@ -9,9 +9,10 @@ module DcbEventStore
     BATCH_SIZE = 1000
     APPEND_LOCK_KEY = 0
 
-    def initialize(conn, upcaster: nil)
+    def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
       @conn = conn
       @upcaster = upcaster
+      @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
     end
 
     def read(query)
@@ -43,22 +44,14 @@ module DcbEventStore
     end
 
     def subscribe(query, after: nil, &block)
-      last_pos = after
-
       catch_up = after ? read_from(query, after: after) : read(query)
-      catch_up.each do |event|
-        last_pos = event.sequence_position
-        block.call(event)
-      end
+      last_pos = instrument_subscribe(catch_up, query, :catch_up, &block) || after
 
       @conn.exec("LISTEN events_appended")
       loop do
         @conn.wait_for_notify do |_channel, _pid, _payload|
           new_events = read_from(query, after: last_pos || 0)
-          new_events.each do |event|
-            last_pos = event.sequence_position
-            block.call(event)
-          end
+          last_pos = instrument_subscribe(new_events, query, :live, &block) || last_pos
         end
       end
     ensure

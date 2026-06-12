@@ -11,8 +11,9 @@ module DcbEventStore
   class InMemoryStore
     include StoreInstrumentation
 
-    def initialize(upcaster: nil)
+    def initialize(upcaster: nil, subscribe_instrumentation: :event)
       @upcaster = upcaster
+      @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
       @rows = []
       @ids = Set.new
       @next_position = 1
@@ -40,7 +41,7 @@ module DcbEventStore
 
     def subscribe(query, after: nil, &block)
       listener = { query: query, last_position: after || 0, block: block }
-      deliver(listener)
+      deliver(listener, :catch_up)
       @listeners << listener
       nil
     end
@@ -137,15 +138,16 @@ module DcbEventStore
       end
     end
 
-    def deliver(listener)
-      read_from(listener[:query], after: listener[:last_position]).each do |event|
+    def deliver(listener, phase)
+      events = read_from(listener[:query], after: listener[:last_position])
+      instrument_subscribe(events, listener[:query], phase) do |event|
         listener[:last_position] = event.sequence_position
         listener[:block].call(event)
       end
     end
 
     def notify_listeners
-      @listeners.each { |listener| deliver(listener) }
+      @listeners.each { |listener| deliver(listener, :live) }
     end
   end
 end
