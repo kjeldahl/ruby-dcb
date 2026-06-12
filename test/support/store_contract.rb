@@ -387,6 +387,61 @@ module StoreContract
     assert events[0].sequence_position > appended[1].sequence_position
   end
 
+  # --- instrumentation ---
+
+  def test_append_emits_instrumentation_event
+    seen = with_instrumentation do
+      @store.append([DcbEventStore::Event.new(type: "A")])
+    end
+
+    appends = seen.select { |event| event.name == "append.dcb" }
+    assert_equal 1, appends.size
+    assert_equal 1, appends[0].payload[:event_count]
+    assert_equal 1, appends[0].payload[:appended_count]
+    assert_kind_of Integer, appends[0].payload[:last_position]
+  end
+
+  def test_read_emits_instrumentation_event_with_count
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+
+    seen = with_instrumentation { @store.read(DcbEventStore::Query.all).to_a }
+
+    reads = seen.select { |event| event.name == "read.dcb" }
+    assert_equal 1, reads.size
+    assert_equal 2, reads[0].payload[:event_count]
+  end
+
+  def test_failed_append_condition_emits_instrumentation_error
+    @store.append([DcbEventStore::Event.new(type: "Conflict")])
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: ["Conflict"])
+                                     ])
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+
+    seen = with_instrumentation do
+      assert_raises(DcbEventStore::ConditionNotMet) do
+        @store.append([DcbEventStore::Event.new(type: "Another")], condition)
+      end
+    end
+
+    appends = seen.select { |event| event.name == "append.dcb" }
+    assert_equal 1, appends.size
+    assert_instance_of DcbEventStore::ConditionNotMet, appends[0].error
+  end
+
+  # Swaps in a fresh global Notifications instance for the duration of the
+  # block and returns the events published while it ran.
+  def with_instrumentation
+    previous = DcbEventStore.instrumentation
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    seen = []
+    DcbEventStore.instrumentation.subscribe { |event| seen << event }
+    yield
+    seen
+  ensure
+    DcbEventStore.instrumentation = previous
+  end
+
   # --- upcaster ---
 
   def test_upcaster_applied_on_read

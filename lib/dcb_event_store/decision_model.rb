@@ -3,15 +3,20 @@ module DcbEventStore
     Result = Data.define(:states, :append_condition)
 
     def self.build(store, **projections)
-      combined_query = Query.new(projections.values.flat_map { |p| p.query.items })
-      events = store.read(combined_query).to_a
+      DcbEventStore.instrumentation.instrument("decision_model.dcb", projections: projections.keys) do |payload|
+        combined_query = Query.new(projections.values.flat_map { |p| p.query.items })
+        events = store.read(combined_query).to_a
 
-      criteria = compile_criteria(projections)
-      events_by_projection, max_position = partition_events(events, projections, criteria)
-      states = projections.to_h { |name, proj| [name, proj.fold(events_by_projection[name])] }
+        criteria = compile_criteria(projections)
+        events_by_projection, max_position = partition_events(events, projections, criteria)
+        states = projections.to_h { |name, proj| [name, proj.fold(events_by_projection[name])] }
 
-      condition = AppendCondition.new(fail_if_events_match: combined_query, after: max_position)
-      Result.new(states: states, append_condition: condition)
+        payload[:event_count] = events.size
+        payload[:last_position] = max_position
+
+        condition = AppendCondition.new(fail_if_events_match: combined_query, after: max_position)
+        Result.new(states: states, append_condition: condition)
+      end
     end
 
     def self.compile_criteria(projections)

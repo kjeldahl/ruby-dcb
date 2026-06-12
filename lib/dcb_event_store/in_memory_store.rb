@@ -9,6 +9,8 @@ module DcbEventStore
   # for notifications; it catches up on existing events and then delivers
   # matching events synchronously as they are appended.
   class InMemoryStore
+    include StoreInstrumentation
+
     def initialize(upcaster: nil)
       @upcaster = upcaster
       @rows = []
@@ -18,20 +20,22 @@ module DcbEventStore
     end
 
     def read(query)
-      each_matching(query, after: nil)
+      instrument_read(each_matching(query, after: nil), query, nil)
     end
 
     def read_from(query, after:)
-      each_matching(query, after: after)
+      instrument_read(each_matching(query, after: after), query, after)
     end
 
     def append(events, condition = nil)
       events = Array(events)
-      raise ConditionNotMet, "conflicting event(s)" if condition && conflicting_events?(condition)
+      instrument_append(events, condition) do
+        raise ConditionNotMet, "conflicting event(s)" if condition && conflicting_events?(condition)
 
-      sequenced = events.filter_map { |event| insert(event) }
-      notify_listeners unless sequenced.empty?
-      sequenced
+        sequenced = events.filter_map { |event| insert(event) }
+        notify_listeners unless sequenced.empty?
+        sequenced
+      end
     end
 
     def subscribe(query, after: nil, &block)

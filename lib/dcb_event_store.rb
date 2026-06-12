@@ -1,4 +1,7 @@
 require_relative "dcb_event_store/version"
+require_relative "dcb_event_store/notifications"
+require_relative "dcb_event_store/store_instrumentation"
+require_relative "dcb_event_store/log_subscriber"
 require_relative "dcb_event_store/event"
 require_relative "dcb_event_store/sequenced_event"
 require_relative "dcb_event_store/query"
@@ -13,4 +16,11 @@ require_relative "dcb_event_store/upcaster"
 require_relative "dcb_event_store/client"
 
 module DcbEventStore
+  class << self
+    # Process-wide Notifications instance used by all instrumentation
+    # emission points. Replaceable, e.g. with a test-local instance.
+    attr_accessor :instrumentation
+  end
+
+  self.instrumentation = Notifications.new
 end
