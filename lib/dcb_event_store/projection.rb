@@ -14,7 +14,15 @@ module DcbEventStore
     end
 
     def fold(events)
-      events.reduce(@initial_state) { |state, event| apply(state, event) }
+      DcbEventStore.instrumentation.instrument("projection.dcb", event_types: event_types) do |payload|
+        count = 0
+        state = events.reduce(@initial_state) do |acc, event|
+          count += 1
+          apply(acc, event)
+        end
+        payload[:event_count] = count
+        state
+      end
     end
 
     def event_types

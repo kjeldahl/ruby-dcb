@@ -1,0 +1,227 @@
+require_relative "../test_helper"
+require "securerandom"
+
+# Verifies the instrumentation events emitted by stores, projections and
+# decision models. Each test swaps in a fresh Notifications instance so the
+# global instrumentation of other tests is unaffected.
+class InstrumentationTestCase < Minitest::Test
+  def setup
+    @events = []
+    @previous_instrumentation = DcbEventStore.instrumentation
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    DcbEventStore.instrumentation.subscribe { |event| @events << event }
+  end
+
+  def teardown
+    DcbEventStore.instrumentation = @previous_instrumentation
+  end
+end
+
+class TestStoreInstrumentationEmission < InstrumentationTestCase
+  cover "DcbEventStore::InMemoryStore*"
+  cover "DcbEventStore::StoreInstrumentation*"
+
+  def setup
+    super
+    @store = DcbEventStore::InMemoryStore.new
+  end
+
+  def test_append_emits_event_with_counts_and_position
+    @store.append([
+                    DcbEventStore::Event.new(type: "A"),
+                    DcbEventStore::Event.new(type: "A"),
+                    DcbEventStore::Event.new(type: "B")
+                  ])
+
+    assert_equal ["append.dcb"], @events.map(&:name)
+    payload = @events[0].payload
+    assert_equal "DcbEventStore::InMemoryStore", payload[:store]
+    assert_equal 3, payload[:event_count]
+    assert_equal %w[A B], payload[:event_types]
+    assert_equal false, payload[:condition]
+    assert_equal 3, payload[:appended_count]
+    assert_equal 3, payload[:last_position]
+  end
+
+  def test_append_reports_condition_presence
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Other"])])
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+
+    @store.append([DcbEventStore::Event.new(type: "A")], condition)
+
+    assert_equal true, @events[0].payload[:condition]
+    assert_nil @events[0].error
+  end
+
+  def test_append_of_duplicate_reports_zero_appended
+    id = SecureRandom.uuid
+    @store.append([DcbEventStore::Event.new(type: "A", id: id)])
+    @store.append([DcbEventStore::Event.new(type: "A", id: id)])
+
+    payload = @events[1].payload
+    assert_equal 1, payload[:event_count]
+    assert_equal 0, payload[:appended_count]
+    assert_nil payload[:last_position]
+  end
+
+  def test_failed_append_condition_emits_event_with_error
+    @store.append([DcbEventStore::Event.new(type: "Conflict")])
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Conflict"])])
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+
+    assert_raises(DcbEventStore::ConditionNotMet) do
+      @store.append([DcbEventStore::Event.new(type: "Another")], condition)
+    end
+
+    event = @events.last
+    assert_equal "append.dcb", event.name
+    assert_equal true, event.payload[:condition]
+    assert_instance_of DcbEventStore::ConditionNotMet, event.error
+    assert_nil event.payload[:appended_count]
+  end
+
+  def test_read_emits_event_with_count_on_full_enumeration
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+    @events.clear
+
+    query = DcbEventStore::Query.all
+    @store.read(query).to_a
+
+    assert_equal ["read.dcb"], @events.map(&:name)
+    payload = @events[0].payload
+    assert_equal "DcbEventStore::InMemoryStore", payload[:store]
+    assert_same query, payload[:query]
+    assert_nil payload[:after]
+    assert_equal 2, payload[:event_count]
+  end
+
+  def test_read_from_includes_after_position
+    appended = @store.append([
+                               DcbEventStore::Event.new(type: "A"),
+                               DcbEventStore::Event.new(type: "B")
+                             ])
+    @events.clear
+
+    query = DcbEventStore::Query.all
+    @store.read_from(query, after: appended[0].sequence_position).to_a
+
+    payload = @events[0].payload
+    assert_same query, payload[:query]
+    assert_equal appended[0].sequence_position, payload[:after]
+    assert_equal 1, payload[:event_count]
+  end
+
+  def test_each_full_enumeration_emits_its_own_event
+    @store.append([DcbEventStore::Event.new(type: "A")])
+    @events.clear
+
+    enum = @store.read(DcbEventStore::Query.all)
+    enum.to_a
+    enum.to_a
+
+    assert_equal %w[read.dcb read.dcb], @events.map(&:name)
+    assert(@events.all? { |e| e.payload[:event_count] == 1 })
+  end
+
+  def test_read_instrumentation_is_decided_when_the_read_is_issued
+    @store.append([DcbEventStore::Event.new(type: "A")])
+
+    # Nobody listening for read.dcb when the enumerator is built: the read
+    # stays unwrapped, so a subscriber added later sees nothing.
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    enum = @store.read(DcbEventStore::Query.all)
+
+    late = []
+    DcbEventStore.instrumentation.subscribe { |event| late << event }
+    enum.to_a
+
+    assert_empty late
+  end
+
+  def test_partially_consumed_read_reports_events_yielded_so_far
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+    @events.clear
+
+    @store.read(DcbEventStore::Query.all).first
+
+    assert_equal ["read.dcb"], @events.map(&:name)
+    assert_equal 1, @events[0].payload[:event_count]
+  end
+end
+
+class TestProjectionInstrumentation < InstrumentationTestCase
+  cover "DcbEventStore::Projection*"
+
+  def test_fold_emits_event_with_types_and_count
+    projection = DcbEventStore::Projection.new(
+      initial_state: 0,
+      handlers: {"A" => ->(state, _event) { state + 1 }},
+      query: DcbEventStore::Query.all
+    )
+
+    result = projection.fold([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+
+    assert_equal 1, result
+    assert_equal ["projection.dcb"], @events.map(&:name)
+    assert_equal ["A"], @events[0].payload[:event_types]
+    assert_equal 2, @events[0].payload[:event_count]
+  end
+
+  def test_fold_of_no_events_emits_zero_count
+    projection = DcbEventStore::Projection.new(
+      initial_state: :initial,
+      handlers: {},
+      query: DcbEventStore::Query.all
+    )
+
+    assert_equal :initial, projection.fold([])
+    assert_equal 0, @events[0].payload[:event_count]
+  end
+end
+
+class TestDecisionModelInstrumentation < InstrumentationTestCase
+  cover "DcbEventStore::DecisionModel*"
+
+  def test_build_emits_event_with_projection_names_count_and_position
+    store = DcbEventStore::InMemoryStore.new
+    store.append([
+                   DcbEventStore::Event.new(type: "Counted", tags: ["c:1"]),
+                   DcbEventStore::Event.new(type: "Counted", tags: ["c:1"])
+                 ])
+    @events.clear
+
+    projection = DcbEventStore::Projection.new(
+      initial_state: 0,
+      handlers: {"Counted" => ->(state, _event) { state + 1 }},
+      query: DcbEventStore::Query.new([
+                                        DcbEventStore::QueryItem.new(event_types: ["Counted"], tags: ["c:1"])
+                                      ])
+    )
+
+    result = DcbEventStore::DecisionModel.build(store, count: projection)
+
+    assert_equal 2, result.states[:count]
+    # Nested events: the store read and projection fold complete inside build.
+    assert_equal %w[read.dcb projection.dcb decision_model.dcb], @events.map(&:name)
+
+    payload = @events.last.payload
+    assert_equal [:count], payload[:projections]
+    assert_equal 2, payload[:event_count]
+    assert_equal 2, payload[:last_position]
+  end
+
+  def test_build_on_empty_store_reports_nil_last_position
+    store = DcbEventStore::InMemoryStore.new
+    projection = DcbEventStore::Projection.new(
+      initial_state: 0,
+      handlers: {"Counted" => ->(state, _event) { state + 1 }},
+      query: DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Counted"])])
+    )
+
+    DcbEventStore::DecisionModel.build(store, count: projection)
+
+    payload = @events.last.payload
+    assert_equal 0, payload[:event_count]
+    assert_nil payload[:last_position]
+  end
+end

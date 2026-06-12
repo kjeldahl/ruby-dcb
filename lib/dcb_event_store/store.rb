@@ -4,6 +4,8 @@ require "zlib"
 
 module DcbEventStore
   class Store
+    include StoreInstrumentation
+
     BATCH_SIZE = 1000
     APPEND_LOCK_KEY = 0
 
@@ -13,56 +15,30 @@ module DcbEventStore
     end
 
     def read(query)
-      sql, params = build_read_sql(query)
-
-      Enumerator.new do |yielder|
-        offset = 0
-        loop do
-          paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
-          result = @conn.exec_params(paginated, params)
-          break if result.ntuples.zero?
-
-          result.each { |row| yielder << row_to_sequenced_event(row) }
-          break if result.ntuples < BATCH_SIZE
-
-          offset += BATCH_SIZE
-        end
-      end
+      instrument_read(paginated_read(query, after: nil), query, nil)
     end
 
     def read_from(query, after:)
-      sql, params = build_read_sql(query, after: after)
-
-      Enumerator.new do |yielder|
-        offset = 0
-        loop do
-          paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
-          result = @conn.exec_params(paginated, params)
-          break if result.ntuples.zero?
-
-          result.each { |row| yielder << row_to_sequenced_event(row) }
-          break if result.ntuples < BATCH_SIZE
-
-          offset += BATCH_SIZE
-        end
-      end
+      instrument_read(paginated_read(query, after: after), query, after)
     end
 
     def append(events, condition = nil)
       events = Array(events)
-      with_transaction do
-        acquire_locks!(condition)
+      instrument_append(events, condition) do
+        with_transaction do
+          acquire_locks!(condition)
 
-        sequenced = if condition
-                      append_with_condition(events, condition)
-                    else
-                      append_without_condition(events)
-                    end
+          sequenced = if condition
+                        append_with_condition(events, condition)
+                      else
+                        append_without_condition(events)
+                      end
 
-        notify_position = sequenced.last&.sequence_position
-        @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
+          notify_position = sequenced.last&.sequence_position
+          @conn.exec("NOTIFY events_appended, '#{notify_position}'") if notify_position
 
-        sequenced
+          sequenced
+        end
       end
     end
 
@@ -94,6 +70,24 @@ module DcbEventStore
     end
 
     private
+
+    def paginated_read(query, after:)
+      sql, params = build_read_sql(query, after: after)
+
+      Enumerator.new do |yielder|
+        offset = 0
+        loop do
+          paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
+          result = @conn.exec_params(paginated, params)
+          break if result.ntuples.zero?
+
+          result.each { |row| yielder << row_to_sequenced_event(row) }
+          break if result.ntuples < BATCH_SIZE
+
+          offset += BATCH_SIZE
+        end
+      end
+    end
 
     def build_read_sql(query, after: nil)
       where, params = build_where_clause(query, after)

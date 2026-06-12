@@ -6,6 +6,7 @@ Gem::Specification.new do |s|
   s.files       = Dir["lib/**/*.rb"]
   s.required_ruby_version = ">= 3.3"
 
+  s.add_dependency "logger", "~> 1.6"
   s.add_dependency "pg", "~> 1.5"
 
   s.add_development_dependency "minitest", "~> 5.0"

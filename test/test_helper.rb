@@ -16,6 +16,11 @@ SimpleCov.start do
     "lib/dcb_event_store/subscription.rb"
   ]
   add_group "Schema", ["lib/dcb_event_store/schema.rb"]
+  add_group "Instrumentation", [
+    "lib/dcb_event_store/notifications.rb",
+    "lib/dcb_event_store/store_instrumentation.rb",
+    "lib/dcb_event_store/log_subscriber.rb"
+  ]
 
   if ENV["CI"]
     formatter SimpleCov::Formatter::MultiFormatter.new(

@@ -134,6 +134,46 @@ end
 
 Uses PostgreSQL `LISTEN/NOTIFY` with catch-up reads.
 
+### Instrumentation (observability)
+
+The gem ships a lightweight notification framework modeled on `ActiveSupport::Notifications`. Store operations, projection folds and decision model builds emit timed events through a process-wide `DcbEventStore::Notifications` instance; adapters subscribe and forward them to monitoring systems. With no subscribers the emission points are near-zero cost.
+
+```ruby
+# Subscribe to everything (nil pattern), one event name (String), or a Regexp
+subscription = DcbEventStore.instrumentation.subscribe(/\.dcb\z/) do |event|
+  event.name      # "append.dcb"
+  event.duration  # seconds, from a monotonic clock
+  event.payload   # operation-specific Hash (see below)
+  event.error     # the raised exception, or nil
+end
+
+DcbEventStore.instrumentation.unsubscribe(subscription)
+```
+
+Emitted events and payloads:
+
+| Event | Emitted by | Payload |
+|-------|------------|---------|
+| `append.dcb` | `Store#append`, `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
+| `read.dcb` | `Store#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
+| `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
+| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:` |
+
+A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
+
+Reads are lazy enumerators, so `read.dcb` fires when the enumeration finishes (completing or exiting early via `break`/`#first`), with `event_count` reflecting the events actually yielded. Whether a read is instrumented is decided when the read is issued, and an abandoned external iterator (`#next` without exhausting) publishes nothing.
+
+`DcbEventStore::LogSubscriber` is a proof-of-concept adapter that logs one line per event, and the reference for richer connectors (AppSignal, Prometheus, ...):
+
+```ruby
+DcbEventStore::LogSubscriber.new.attach_to   # logs to $stdout
+# I, [...]  INFO -- : append.dcb (1.42ms) store=DcbEventStore::Store event_count=2 event_types=[CourseDefined] condition=true appended_count=2 last_position=17
+
+DcbEventStore::LogSubscriber.new(logger: Rails.logger, pattern: "append.dcb").attach_to
+```
+
+`DcbEventStore.instrumentation` is replaceable (e.g. with a fresh instance per test). Subscriber management is thread-safe; publication runs synchronously on the instrumented thread, so keep subscribers fast and non-raising.
+
 ### In-memory store for fast tests
 
 `InMemoryStore` is a drop-in replacement for `Store` with no PostgreSQL dependency, making application test suites (and especially mutation testing) much faster:
