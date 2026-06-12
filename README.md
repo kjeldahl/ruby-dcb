@@ -191,6 +191,23 @@ DcbEventStore::LogSubscriber.new.attach_to   # logs to $stdout
 DcbEventStore::LogSubscriber.new(logger: Rails.logger, pattern: "append.dcb").attach_to
 ```
 
+#### Rails query-log style
+
+`DcbEventStore::RailsLogSubscriber` renders events the way an ordinary Rails app renders SQL query metrics — a bold, colored label with the duration in parentheses, logged at `debug` so event-store activity blends into the surrounding query log:
+
+```ruby
+# In config/initializers/dcb_event_store.rb
+DcbEventStore::RailsLogSubscriber.new.attach_to
+#   DCB Append (1.4ms)  store=DcbEventStore::Store event_count=2 event_types=[CourseDefined] condition=true appended_count=2 last_position=17
+#   DCB Read (0.5ms)  store=DcbEventStore::Store query=... after= event_count=12
+```
+
+It reuses the same ANSI color codes `ActiveSupport::LogSubscriber` uses (label in bold; red on error), but **takes no dependency on Rails or ActiveSupport** — it logs to `Rails.logger` when Rails is loaded and falls back to `$stdout` otherwise. Override with `logger:`, `pattern:`, or `colorize:` (the last is handy for non-TTY log destinations):
+
+```ruby
+DcbEventStore::RailsLogSubscriber.new(colorize: false, pattern: "append.dcb").attach_to
+```
+
 `DcbEventStore.instrumentation` is replaceable (e.g. with a fresh instance per test). Subscriber management is thread-safe; publication runs synchronously on the instrumented thread, so keep subscribers fast and non-raising.
 
 ### In-memory store for fast tests

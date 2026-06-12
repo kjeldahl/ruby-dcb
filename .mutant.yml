@@ -10,6 +10,7 @@ requires:
   - ./test/unit/test_in_memory_store
   - ./test/unit/test_notifications
   - ./test/unit/test_log_subscriber
+  - ./test/unit/test_rails_log_subscriber
   - ./test/unit/test_instrumentation
   - ./test/integration/test_store_append
   - ./test/integration/test_store_read
@@ -35,6 +36,7 @@ matcher:
     - DcbEventStore::InMemoryStore*
     - DcbEventStore::Notifications*
     - DcbEventStore::LogSubscriber*
+    - DcbEventStore::RailsLogSubscriber*
     - DcbEventStore::StoreInstrumentation*
 # TODO: Needs refactor before being added to mutant testing
 #    - DcbEventStore::Store*

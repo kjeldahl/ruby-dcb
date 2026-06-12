@@ -19,7 +19,8 @@ SimpleCov.start do
   add_group "Instrumentation", [
     "lib/dcb_event_store/notifications.rb",
     "lib/dcb_event_store/store_instrumentation.rb",
-    "lib/dcb_event_store/log_subscriber.rb"
+    "lib/dcb_event_store/log_subscriber.rb",
+    "lib/dcb_event_store/rails_log_subscriber.rb"
   ]
 
   if ENV["CI"]
