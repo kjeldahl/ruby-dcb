@@ -12,6 +12,7 @@ requires:
   - ./test/unit/test_active_support_instrumentation
   - ./test/unit/test_log_subscriber
   - ./test/unit/test_rails_log_subscriber
+  - ./test/unit/test_appsignal_subscriber
   - ./test/unit/test_instrumentation
   - ./test/integration/test_store_append
   - ./test/integration/test_store_read
@@ -39,6 +40,7 @@ matcher:
     - DcbEventStore::ActiveSupportInstrumentation*
     - DcbEventStore::LogSubscriber*
     - DcbEventStore::RailsLogSubscriber*
+    - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
 # TODO: Needs refactor before being added to mutant testing
 #    - DcbEventStore::Store*
