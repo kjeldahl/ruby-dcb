@@ -237,6 +237,28 @@ DcbEventStore.instrumentation.subscribe("append.dcb") { |event| ... }
 
 Failures follow the ActiveSupport payload convention for AS::N subscribers (`payload[:exception]` / `payload[:exception_object]`) and remain available as `event.error` through the DcbEventStore API. ActiveSupport is loaded lazily when the engine is constructed; the gem itself takes no dependency on it.
 
+#### AppSignal
+
+`DcbEventStore::AppsignalSubscriber` translates events into [AppSignal custom metrics](https://docs.appsignal.com/metrics/custom.html). Add `gem "appsignal"` to your Gemfile (the gem is loaded lazily; this gem takes no dependency on it) and attach the adapter:
+
+```ruby
+DcbEventStore::AppsignalSubscriber.new.attach_to
+# customizable: prefix: "dcb", pattern: /\.dcb\z/, appsignal: <receiver>
+```
+
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `dcb.<operation>.duration` | distribution (ms) | every operation (`append`, `read`, `subscribe`, `projection`, `decision_model`) |
+| `dcb.<operation>.errors` | counter | operations that raised |
+| `dcb.append.events` | counter | events actually written (post-dedup) |
+| `dcb.append.conflicts` | counter | `ConditionNotMet` failures — the consistency-boundary conflict rate |
+| `dcb.subscribe.delivered` | counter | events delivered to subscribers, tagged `phase=live/catch_up` |
+| `dcb.subscribe.lag` | distribution (ms) | live delivery lag — the staleness signal; alert on its p95/p99 |
+
+Metrics are tagged with the emitting store (`store=Store` / `store=InMemoryStore`). The adapter encodes the gem's semantics: delivery lag is recorded **only for the `:live` phase** (catch-up replays history, where large lag is expected and would poison the staleness signal), and comes from `lag:` or `max_lag:` depending on the store's `subscribe_instrumentation:` mode.
+
+Because metrics are recorded after each operation completes, the adapter works against either instrumentation engine. For spans inside request traces, use `ActiveSupportInstrumentation` and wrap application entry points with `Appsignal.instrument`.
+
 `DcbEventStore.instrumentation` is replaceable (e.g. with a fresh instance per test). Subscriber management is thread-safe; publication runs synchronously on the instrumented thread, so keep subscribers fast and non-raising.
 
 ### In-memory store for fast tests

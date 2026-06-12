@@ -21,7 +21,8 @@ SimpleCov.start do
     "lib/dcb_event_store/active_support_instrumentation.rb",
     "lib/dcb_event_store/store_instrumentation.rb",
     "lib/dcb_event_store/log_subscriber.rb",
-    "lib/dcb_event_store/rails_log_subscriber.rb"
+    "lib/dcb_event_store/rails_log_subscriber.rb",
+    "lib/dcb_event_store/appsignal_subscriber.rb"
   ]
 
   if ENV["CI"]
