@@ -18,6 +18,7 @@ SimpleCov.start do
   add_group "Schema", ["lib/dcb_event_store/schema.rb"]
   add_group "Instrumentation", [
     "lib/dcb_event_store/notifications.rb",
+    "lib/dcb_event_store/active_support_instrumentation.rb",
     "lib/dcb_event_store/store_instrumentation.rb",
     "lib/dcb_event_store/log_subscriber.rb",
     "lib/dcb_event_store/rails_log_subscriber.rb"

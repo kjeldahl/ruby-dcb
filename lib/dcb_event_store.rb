@@ -1,5 +1,6 @@
 require_relative "dcb_event_store/version"
 require_relative "dcb_event_store/notifications"
+require_relative "dcb_event_store/active_support_instrumentation"
 require_relative "dcb_event_store/store_instrumentation"
 require_relative "dcb_event_store/log_subscriber"
 require_relative "dcb_event_store/rails_log_subscriber"

@@ -208,6 +208,35 @@ It reuses the same ANSI color codes `ActiveSupport::LogSubscriber` uses (label i
 DcbEventStore::RailsLogSubscriber.new(colorize: false, pattern: "append.dcb").attach_to
 ```
 
+#### Rails setup: ActiveSupport::Notifications and the Rails logger
+
+For full Rails integration, swap the instrumentation engine for `DcbEventStore::ActiveSupportInstrumentation` — a drop-in replacement (verified by a shared engine contract) that routes every `*.dcb` event through `ActiveSupport::Notifications`. Anything that consumes AS::N — APM agents (AppSignal, Skylight, Datadog), lograge, your own subscribers — then sees event-store activity natively, correctly nested inside the surrounding request/job spans:
+
+```ruby
+# config/initializers/dcb_event_store.rb
+
+# Route all dcb events through ActiveSupport::Notifications
+DcbEventStore.instrumentation = DcbEventStore::ActiveSupportInstrumentation.new
+
+# Render them in the query log via the Rails logger
+DcbEventStore::RailsLogSubscriber.new.attach_to
+```
+
+With the engine swapped, both subscription styles work and can be mixed freely:
+
+```ruby
+# Plain ActiveSupport::Notifications — yields ActiveSupport::Notifications::Event
+ActiveSupport::Notifications.subscribe(/\.dcb\z/) do |event|
+  StatsD.distribution("dcb.#{event.name.delete_suffix('.dcb')}", event.duration)
+end
+
+# DcbEventStore API — yields DcbEventStore::Notifications::Event, so the
+# bundled adapters (LogSubscriber, RailsLogSubscriber) keep working unchanged
+DcbEventStore.instrumentation.subscribe("append.dcb") { |event| ... }
+```
+
+Failures follow the ActiveSupport payload convention for AS::N subscribers (`payload[:exception]` / `payload[:exception_object]`) and remain available as `event.error` through the DcbEventStore API. ActiveSupport is loaded lazily when the engine is constructed; the gem itself takes no dependency on it.
+
 `DcbEventStore.instrumentation` is replaceable (e.g. with a fresh instance per test). Subscriber management is thread-safe; publication runs synchronously on the instrumented thread, so keep subscribers fast and non-raising.
 
 ### In-memory store for fast tests
