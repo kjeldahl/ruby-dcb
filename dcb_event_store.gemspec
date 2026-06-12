@@ -9,6 +9,7 @@ Gem::Specification.new do |s|
   s.add_dependency "logger", "~> 1.6"
   s.add_dependency "pg", "~> 1.5"
 
+  s.add_development_dependency "activesupport", ">= 7.1"
   s.add_development_dependency "minitest", "~> 5.0"
   s.add_development_dependency "concurrent-ruby", "~> 1.2"
   s.add_development_dependency "rake", "~> 13.0"
