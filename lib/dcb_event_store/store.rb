@@ -1,3 +1,4 @@
+require "pg"
 require "json"
 require "time"
 require "zlib"
@@ -8,6 +9,12 @@ module DcbEventStore
 
     BATCH_SIZE = 1000
     APPEND_LOCK_KEY = 0
+
+    # Decoder/encoder for PostgreSQL text arrays. These implement the full
+    # PostgreSQL array grammar (quoting, backslash escaping, embedded commas,
+    # braces, whitespace and empty strings), so we don't have to.
+    PG_ARRAY_DECODER = PG::TextDecoder::Array.new
+    PG_ARRAY_ENCODER = PG::TextEncoder::Array.new
 
     def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
       @conn = conn
@@ -110,57 +117,29 @@ module DcbEventStore
       )
     end
 
-    # Parses a PostgreSQL text array string into a Ruby array.
-    # PostgreSQL text arrays are formatted as: {"value1","value2",...}
-    # where values are double-quoted and internal quotes are escaped by doubling.
-    #
-    # Handles:
-    # - nil and empty arrays
-    # - Standard quoted strings
-    # - Escaped quotes (double quotes become single quotes in output)
-    # - Whitespace around elements
-    # - Empty strings
-    # - Special characters (colons, commas, braces)
-    # - Unicode characters
+    # Parses a PostgreSQL text array literal (e.g. {a,b} or {"a","b,c"}) into a
+    # Ruby array of strings. Returns [] for nil or the empty array literal.
     #
     # Examples:
-    #   parse_pg_array('{"a","b"}') => ["a", "b"]
-    #   parse_pg_array('{"a""b"}') => ["a\"b"]
-    #   parse_pg_array('{ }') => []
-    #   parse_pg_array(nil) => []
+    #   parse_pg_array('{a,b}')       => ["a", "b"]
+    #   parse_pg_array('{"a\"b"}')    => ["a\"b"]
+    #   parse_pg_array(nil)           => []
     def parse_pg_array(str)
-      return [] if str.nil? || str.strip == "{}"
+      return [] if str.nil?
 
-      content = str.strip
-      return [] if content == "{}"
-
-      # Remove outer braces
-      content = content[1..-2].strip
-      return [] if content.empty?
-
-      # Split by ", (quote-comma) which marks the end of each element
-      # This handles escaped quotes ("" becomes ") correctly
-      parts = content.split(/"\s*,\s*"/)
-      parts.map do |part|
-        # Remove surrounding quotes and unescape double quotes
-        part = part.strip
-        part = part[1..-1] if part.start_with?("\"") && part.end_with?("\"")
-        part.gsub("\"\"", "\"")
-      end
+      PG_ARRAY_DECODER.decode(str)
     end
 
-    # Converts a Ruby array to a PostgreSQL text array string.
-    # Properly escapes quotes by doubling them (PostgreSQL standard).
+    # Converts a Ruby array into a PostgreSQL text array literal, escaping
+    # special characters so it round-trips through a text[] column or bind
+    # parameter.
     #
     # Examples:
-    #   to_pg_array(["a", "b"]) => '{"a","b"}'
-    #   to_pg_array(['a"b']) => '{"a""b"}'
-    #   to_pg_array([]) => '{}'
+    #   to_pg_array(["a", "b"]) => '{a,b}'
+    #   to_pg_array(['a"b'])    => '{"a\"b"}'
+    #   to_pg_array([])         => '{}'
     def to_pg_array(arr)
-      return "{}" if arr.empty?
-
-      escaped = arr.map { |s| s.to_s.gsub("\"", "\"\"") }
-      "{#{escaped.map { |s| "\"#{s}\"" }.join(",")}}"
+      PG_ARRAY_ENCODER.encode(arr.map(&:to_s))
     end
 
     def acquire_locks!(condition)
@@ -217,7 +196,7 @@ module DcbEventStore
                       "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
         insert_params.push(
           event.id, event.type, JSON.generate(event.data),
-          "{#{event.tags.join(',')}}",
+          to_pg_array(event.tags),
           event.causation_id, event.correlation_id, 1
         )
       end
@@ -233,7 +212,7 @@ module DcbEventStore
             ON CONFLICT (event_id) DO NOTHING
             RETURNING sequence_position, created_at
           SQL
-          [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(',')}}",
+          [event.id, event.type, JSON.generate(event.data), to_pg_array(event.tags),
            event.causation_id, event.correlation_id, 1]
         )
         next nil if result.ntuples.zero?
