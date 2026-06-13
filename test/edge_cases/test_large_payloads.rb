@@ -1,18 +1,18 @@
-require "test_helper"
+require_relative "../test_helper"
+require_relative "../support/database"
 
 # Tests for handling large payloads and performance
 class TestLargePayloads < Minitest::Test
   cover "DcbEventStore::Store*"
 
+  include DatabaseHelper
+
   def setup
-    @conn = PG.connect(dbname: "dcb_event_store_test")
-    DcbEventStore::Schema.create!(@conn)
-    @store = DcbEventStore::Store.new(@conn)
+    setup_db
   end
 
   def teardown
-    @conn.exec("TRUNCATE TABLE events")
-    @conn.close
+    teardown_db
   end
 
   # --- Large data payloads ---
@@ -21,7 +21,7 @@ class TestLargePayloads < Minitest::Test
     # Create a large data payload (just under typical limits)
     large_string = "x" * 500_000 # 500KB string
     data = { content: large_string, metadata: { size: large_string.length } }
-    
+
     event = DcbEventStore::Event.new(type: "LargePayload", data: data, tags: ["large:data"])
     result = @store.append([event])
     assert_equal 1, result.size
@@ -35,22 +35,23 @@ class TestLargePayloads < Minitest::Test
     # Create data with many fields
     data = {}
     100.times do |i|
-      data["field_#{i}"] = "value_#{i}"
+      data[:"field_#{i}"] = "value_#{i}"
     end
-    
+
     event = DcbEventStore::Event.new(type: "ManyFields", data: data, tags: ["many:fields"])
     result = @store.append([event])
     assert_equal 1, result.size
 
+    # Data round-trips with symbol keys (the store reads with symbolize_names).
     read_events = @store.read(DcbEventStore::Query.all).to_a
-    assert_equal "value_50", read_events[0].data["field_50"]
+    assert_equal "value_50", read_events[0].data[:field_50]
     assert_equal 100, read_events[0].data.keys.size
   end
 
   def test_data_with_deep_nesting
     # Create deeply nested data
     data = { level1: { level2: { level3: { level4: { level5: "deep value" } } } } }
-    
+
     event = DcbEventStore::Event.new(type: "DeepNesting", data: data, tags: ["deep:nesting"])
     result = @store.append([event])
     assert_equal 1, result.size
@@ -62,7 +63,7 @@ class TestLargePayloads < Minitest::Test
   def test_data_with_large_array
     # Create data with a large array
     data = { items: (1..1000).map { |i| { id: i, name: "Item #{i}" } } }
-    
+
     event = DcbEventStore::Event.new(type: "LargeArray", data: data, tags: ["large:array"])
     result = @store.append([event])
     assert_equal 1, result.size
@@ -95,8 +96,8 @@ class TestLargePayloads < Minitest::Test
 
     # Query for one tag group
     query = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["group:0"])
-    ])
+                                       DcbEventStore::QueryItem.new(event_types: [], tags: ["group:0"])
+                                     ])
     events = @store.read(query).to_a
     assert_equal 2, events.size # group:0 appears for i=0 and i=5
   end
@@ -115,14 +116,15 @@ class TestLargePayloads < Minitest::Test
   end
 
   def test_long_string_in_data_key
-    long_key = "key_" + "x" * 200
+    long_key = "key_#{'x' * 200}"
     data = { long_key => "value" }
     event = DcbEventStore::Event.new(type: "LongKey", data: data, tags: ["long:key"])
     result = @store.append([event])
     assert_equal 1, result.size
 
+    # Keys come back as symbols (the store reads with symbolize_names).
     read_events = @store.read(DcbEventStore::Query.all).to_a
-    assert_equal "value", read_events[0].data[long_key]
+    assert_equal "value", read_events[0].data[long_key.to_sym]
   end
 
   # --- Batch operations with large payloads ---
@@ -132,7 +134,7 @@ class TestLargePayloads < Minitest::Test
       data = { id: i, content: "x" * 50_000 } # 50KB per event
       DcbEventStore::Event.new(type: "BatchEvent", data: data, tags: ["batch:#{i}"])
     end
-    
+
     result = @store.append(events)
     assert_equal 10, result.size
 

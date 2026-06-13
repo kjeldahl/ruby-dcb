@@ -156,7 +156,7 @@ class TestValidation < Minitest::Test
 
   def test_validate_data_too_large
     # Create data that exceeds 1MB when serialized
-    large_data = { data: "x" * (1_000_000 / 2) } # Will be > 1MB when JSON serialized
+    large_data = { data: "x" * 1_100_000 } # > 1MB once JSON serialized
     error = assert_raises(DcbEventStore::Validation::ValidationError) do
       DcbEventStore::Validation.validate_data(large_data)
     end
