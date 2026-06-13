@@ -1,4 +1,3 @@
-require "pg"
 require "json"
 require "time"
 require "zlib"
@@ -9,12 +8,6 @@ module DcbEventStore
 
     BATCH_SIZE = 1000
     APPEND_LOCK_KEY = 0
-
-    # Decoder/encoder for PostgreSQL text arrays. These implement the full
-    # PostgreSQL array grammar (quoting, backslash escaping, embedded commas,
-    # braces, whitespace and empty strings), so we don't have to.
-    PG_ARRAY_DECODER = PG::TextDecoder::Array.new
-    PG_ARRAY_ENCODER = PG::TextEncoder::Array.new
 
     def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
       @conn = conn
@@ -127,7 +120,7 @@ module DcbEventStore
     def parse_pg_array(str)
       return [] if str.nil?
 
-      PG_ARRAY_DECODER.decode(str)
+      pg_array_decoder.decode(str)
     end
 
     # Converts a Ruby array into a PostgreSQL text array literal, escaping
@@ -139,7 +132,18 @@ module DcbEventStore
     #   to_pg_array(['a"b'])    => '{"a\"b"}'
     #   to_pg_array([])         => '{}'
     def to_pg_array(arr)
-      PG_ARRAY_ENCODER.encode(arr.map(&:to_s))
+      pg_array_encoder.encode(arr.map(&:to_s))
+    end
+
+    # PG's text array codec implements the full array grammar (quoting,
+    # backslash escaping, embedded commas, braces, whitespace, empty strings).
+    # Built lazily so requiring the gem never references PG at load time.
+    def pg_array_decoder
+      @pg_array_decoder ||= PG::TextDecoder::Array.new
+    end
+
+    def pg_array_encoder
+      @pg_array_encoder ||= PG::TextEncoder::Array.new
     end
 
     def acquire_locks!(condition)
