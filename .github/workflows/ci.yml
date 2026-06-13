@@ -49,6 +49,38 @@ jobs:
           path: coverage/
           retention-days: 30
 
+  # Runs mutation testing incrementally on pull requests, gating only the
+  # subjects whose source changed versus the base branch. This enforces 100%
+  # mutation coverage on new/changed code without failing on pre-existing
+  # surviving mutants elsewhere in the suite. Single Ruby version by design.
+  mutant:
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb dcb_event_store_test
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Run mutation tests (incremental)
+        # The pinned Bundler does not expose mutant's bin wrapper, so resolve
+        # the mutant-ruby executable via Gem.bin_path and load it directly.
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bundle exec ruby -e 'load Gem.bin_path("mutant", "mutant-ruby")' -- run --since "origin/${{ github.base_ref }}"
+
   coverage-report:
     needs: test
     runs-on: ubuntu-latest
