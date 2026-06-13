@@ -1,17 +1,17 @@
 require "json"
 require "time"
-require "zlib"
 
 module DcbEventStore
   class Store
     include StoreInstrumentation
 
     BATCH_SIZE = 1000
-    APPEND_LOCK_KEY = 0
 
     def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
       @conn = conn
-      @upcaster = upcaster
+      @codec = PgArrayCodec.new
+      @sql = SqlBuilder.new(@codec)
+      @row_mapper = RowMapper.new(@codec, upcaster)
       @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
     end
 
@@ -68,101 +68,28 @@ module DcbEventStore
       Enumerator.new do |yielder|
         cursor = after
         loop do
-          sql, params = build_read_sql(query, after: cursor)
+          sql, params = @sql.read_sql(query, after: cursor)
           result = @conn.exec_params("#{sql} LIMIT #{BATCH_SIZE}", params)
           break if result.ntuples.zero?
 
           result.each do |row|
             cursor = row["sequence_position"].to_i
-            yielder << row_to_sequenced_event(row)
+            yielder << @row_mapper.to_sequenced_event(row)
           end
           break if result.ntuples < BATCH_SIZE
         end
       end
     end
 
-    def build_read_sql(query, after: nil)
-      where, params = build_where_clause(query, after)
-      sql = "SELECT * FROM events"
-      sql += " WHERE #{where}" if where
-      sql += " ORDER BY sequence_position ASC"
-      [sql, params]
-    end
-
-    def row_to_sequenced_event(row)
-      type = row["type"]
-      data = JSON.parse(row["data"], symbolize_names: true)
-      version = row["schema_version"].to_i
-
-      data, version = @upcaster.upcast(type, data, version) if @upcaster
-
-      SequencedEvent.new(
-        sequence_position: row["sequence_position"].to_i,
-        type: type,
-        data: data,
-        tags: parse_pg_array(row["tags"]),
-        created_at: Time.parse(row["created_at"]),
-        id: row["event_id"],
-        causation_id: row["causation_id"],
-        correlation_id: row["correlation_id"],
-        schema_version: version
-      )
-    end
-
-    # Parses a PostgreSQL text array literal (e.g. {a,b} or {"a","b,c"}) into a
-    # Ruby array of strings. Returns [] for nil or the empty array literal.
-    #
-    # Examples:
-    #   parse_pg_array('{a,b}')       => ["a", "b"]
-    #   parse_pg_array('{"a\"b"}')    => ["a\"b"]
-    #   parse_pg_array(nil)           => []
-    def parse_pg_array(str)
-      return [] if str.nil?
-
-      pg_array_decoder.decode(str)
-    end
-
-    # Converts a Ruby array into a PostgreSQL text array literal, escaping
-    # special characters so it round-trips through a text[] column or bind
-    # parameter.
-    #
-    # Examples:
-    #   to_pg_array(["a", "b"]) => '{a,b}'
-    #   to_pg_array(['a"b'])    => '{"a\"b"}'
-    #   to_pg_array([])         => '{}'
-    def to_pg_array(arr)
-      pg_array_encoder.encode(arr.map(&:to_s))
-    end
-
-    # PG's text array codec implements the full array grammar (quoting,
-    # backslash escaping, embedded commas, braces, whitespace, empty strings).
-    # Built lazily so requiring the gem never references PG at load time.
-    def pg_array_decoder
-      @pg_array_decoder ||= PG::TextDecoder::Array.new
-    end
-
-    def pg_array_encoder
-      @pg_array_encoder ||= PG::TextEncoder::Array.new
-    end
-
     def acquire_locks!(condition)
-      keys = condition_lock_keys(condition)
+      keys = LockKeys.for(condition)
       pg_arr = "{#{keys.join(',')}}"
       @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [pg_arr])
     end
 
-    def condition_lock_keys(condition)
-      return [APPEND_LOCK_KEY] unless condition
-
-      tags = condition.fail_if_events_match.items.flat_map(&:tags).uniq
-      return [APPEND_LOCK_KEY] if tags.empty?
-
-      tags.map { |t| Zlib.crc32(t).abs }.sort
-    end
-
     def append_with_condition(events, condition)
-      cond_sql, cond_params = build_condition_sql(condition.fail_if_events_match, condition.after)
-      value_rows, insert_params = build_values_clause(events, cond_params.size)
+      cond_sql, cond_params = @sql.condition_sql(condition.fail_if_events_match, condition.after)
+      value_rows, insert_params = @sql.values_clause(events, cond_params.size)
 
       result = @conn.exec_params(
         <<~SQL,
@@ -186,24 +113,8 @@ module DcbEventStore
 
       events_by_id = events.to_h { |e| [e.id, e] }
       result.map do |row|
-        row_to_appended_event(events_by_id[row["event_id"]], row)
+        @row_mapper.to_appended_event(events_by_id[row["event_id"]], row)
       end
-    end
-
-    def build_values_clause(events, param_offset)
-      value_rows = []
-      insert_params = []
-      events.each do |event|
-        offset = param_offset + insert_params.size
-        value_rows << "($#{offset + 1}::uuid, $#{offset + 2}::text, $#{offset + 3}::jsonb, " \
-                      "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
-        insert_params.push(
-          event.id, event.type, JSON.generate(event.data),
-          to_pg_array(event.tags),
-          event.causation_id, event.correlation_id, 1
-        )
-      end
-      [value_rows, insert_params]
     end
 
     def append_without_condition(events)
@@ -215,67 +126,13 @@ module DcbEventStore
             ON CONFLICT (event_id) DO NOTHING
             RETURNING sequence_position, created_at
           SQL
-          [event.id, event.type, JSON.generate(event.data), to_pg_array(event.tags),
+          [event.id, event.type, JSON.generate(event.data), @codec.encode(event.tags),
            event.causation_id, event.correlation_id, 1]
         )
         next nil if result.ntuples.zero?
 
-        row_to_appended_event(event, result[0])
+        @row_mapper.to_appended_event(event, result[0])
       end
-    end
-
-    def row_to_appended_event(event, row)
-      SequencedEvent.new(
-        sequence_position: row["sequence_position"].to_i,
-        type: event.type,
-        data: event.data,
-        tags: event.tags,
-        created_at: Time.parse(row["created_at"]),
-        id: event.id,
-        causation_id: event.causation_id,
-        correlation_id: event.correlation_id,
-        schema_version: 1
-      )
-    end
-
-    def build_condition_sql(query, after)
-      where, params = build_where_clause(query, after)
-      sql = where ? "SELECT COUNT(*) FROM events WHERE #{where}" : "SELECT COUNT(*) FROM events"
-      [sql, params]
-    end
-
-    def build_where_clause(query, after)
-      return match_all_where(after) if query.match_all?
-
-      params = []
-      clauses = query.items.filter_map { |item| build_item_clause(item, params) }
-      where = clauses.join(" OR ")
-
-      if after
-        params << after
-        where = "(#{where}) AND sequence_position > $#{params.size}"
-      end
-
-      [where, params]
-    end
-
-    def match_all_where(after)
-      return ["sequence_position > $1", [after]] if after
-
-      [nil, []]
-    end
-
-    def build_item_clause(item, params)
-      parts = []
-      unless item.event_types.empty?
-        params << to_pg_array(item.event_types)
-        parts << "type = ANY($#{params.size}::text[])"
-      end
-      unless item.tags.empty?
-        params << to_pg_array(item.tags)
-        parts << "tags @> $#{params.size}::text[]"
-      end
-      parts.empty? ? nil : "(#{parts.join(' AND ')})"
     end
 
     def with_transaction
