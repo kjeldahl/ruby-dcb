@@ -110,14 +110,57 @@ module DcbEventStore
       )
     end
 
+    # Parses a PostgreSQL text array string into a Ruby array.
+    # PostgreSQL text arrays are formatted as: {"value1","value2",...}
+    # where values are double-quoted and internal quotes are escaped by doubling.
+    #
+    # Handles:
+    # - nil and empty arrays
+    # - Standard quoted strings
+    # - Escaped quotes (double quotes become single quotes in output)
+    # - Whitespace around elements
+    # - Empty strings
+    # - Special characters (colons, commas, braces)
+    # - Unicode characters
+    #
+    # Examples:
+    #   parse_pg_array('{"a","b"}') => ["a", "b"]
+    #   parse_pg_array('{"a""b"}') => ["a\"b"]
+    #   parse_pg_array('{ }') => []
+    #   parse_pg_array(nil) => []
     def parse_pg_array(str)
-      return [] if str.nil? || str == "{}"
+      return [] if str.nil? || str.strip == "{}"
 
-      str.delete_prefix("{").delete_suffix("}").split(",").map { |s| s.delete('"') }
+      content = str.strip
+      return [] if content == "{}"
+
+      # Remove outer braces
+      content = content[1..-2].strip
+      return [] if content.empty?
+
+      # Split by ", (quote-comma) which marks the end of each element
+      # This handles escaped quotes ("" becomes ") correctly
+      parts = content.split(/"\s*,\s*"/)
+      parts.map do |part|
+        # Remove surrounding quotes and unescape double quotes
+        part = part.strip
+        part = part[1..-1] if part.start_with?("\"") && part.end_with?("\"")
+        part.gsub("\"\"", "\"")
+      end
     end
 
+    # Converts a Ruby array to a PostgreSQL text array string.
+    # Properly escapes quotes by doubling them (PostgreSQL standard).
+    #
+    # Examples:
+    #   to_pg_array(["a", "b"]) => '{"a","b"}'
+    #   to_pg_array(['a"b']) => '{"a""b"}'
+    #   to_pg_array([]) => '{}'
     def to_pg_array(arr)
-      "{#{arr.join(',')}}"
+      return "{}" if arr.empty?
+
+      escaped = arr.map { |s| s.to_s.gsub("\"", "\"\"") }
+      "{#{escaped.map { |s| "\"#{s}\"" }.join(",")}}"
     end
 
     def acquire_locks!(condition)
