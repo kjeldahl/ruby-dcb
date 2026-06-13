@@ -5,14 +5,13 @@ module DcbEventStore
   Event = Data.define(:type, :data, :tags, :id, :causation_id, :correlation_id) do
     # Default validation is disabled for backward compatibility
     # Set DcbEventStore.validate_events = true to enable validation globally
-    def initialize(type:, data: {}, tags: [], id: SecureRandom.uuid, causation_id: nil, correlation_id: nil, validate: nil)
+    def initialize(type:, data: {}, tags: [], id: SecureRandom.uuid, causation_id: nil, correlation_id: nil,
+                   validate: nil)
       # Use global setting if validate parameter is not explicitly provided
       should_validate = validate.nil? ? DcbEventStore.validate_events : validate
-      
-      if should_validate
-        Validation.validate_event(type: type, data: data, tags: tags)
-      end
-      
+
+      Validation.validate_event(type: type, data: data, tags: tags) if should_validate
+
       super(
         type: type.to_s,
         data: data,
