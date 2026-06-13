@@ -1,18 +1,18 @@
-require "test_helper"
+require_relative "../test_helper"
+require_relative "../support/database"
 
 # Tests for handling special characters in event data
 class TestSpecialCharacters < Minitest::Test
   cover "DcbEventStore::Store*"
 
+  include DatabaseHelper
+
   def setup
-    @conn = PG.connect(dbname: "dcb_event_store_test")
-    DcbEventStore::Schema.create!(@conn)
-    @store = DcbEventStore::Store.new(@conn)
+    setup_db
   end
 
   def teardown
-    @conn.exec("TRUNCATE TABLE events")
-    @conn.close
+    teardown_db
   end
 
   # --- Tag special characters ---
@@ -23,31 +23,34 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["order:123"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["order:123"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
     assert_equal "OrderCreated", read_events[0].type
   end
 
   def test_tags_with_hyphens
-    event = DcbEventStore::Event.new(type: "OrderCreated", tags: ["order-123", "high-priority"])
+    event = DcbEventStore::Event.new(type: "OrderCreated", tags: %w[order-123 high-priority])
     result = @store.append([event])
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["order-123"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["order-123"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
   def test_tags_with_underscores
-    event = DcbEventStore::Event.new(type: "OrderCreated", tags: ["order_123", "internal_use"])
+    event = DcbEventStore::Event.new(type: "OrderCreated", tags: %w[order_123 internal_use])
     result = @store.append([event])
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["order_123"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["order_123"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
@@ -57,8 +60,9 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["order.123"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["order.123"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
@@ -68,8 +72,9 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["tenant/acme"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["tenant/acme"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
@@ -79,8 +84,9 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["region:北京"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["region:北京"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
@@ -90,8 +96,9 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["priority:🔥"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["priority:🔥"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
@@ -102,8 +109,9 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(tags: ["customer name:alice"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: [],
+                                                                                      tags: ["customer name:alice"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
   end
 
@@ -115,8 +123,8 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Order:Created"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: ["Order:Created"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
     assert_equal "Order:Created", read_events[0].type
   end
@@ -127,8 +135,8 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Order-Created"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: ["Order-Created"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
     assert_equal "Order-Created", read_events[0].type
   end
@@ -139,8 +147,8 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: ["Order_Created"])
-    ])).to_a
+                                                         DcbEventStore::QueryItem.new(event_types: ["Order_Created"])
+                                                       ])).to_a
     assert_equal 1, read_events.size
     assert_equal "Order_Created", read_events[0].type
   end
@@ -223,13 +231,13 @@ class TestSpecialCharacters < Minitest::Test
     assert_equal({}, read_events[0].data)
   end
 
-  def test_nil_data_becomes_empty_hash
+  def test_nil_data_roundtrips_as_nil
     event = DcbEventStore::Event.new(type: "OrderCreated", data: nil, tags: ["order:123"])
     result = @store.append([event])
     assert_equal 1, result.size
 
     read_events = @store.read(DcbEventStore::Query.all).to_a
-    # Note: nil data is stored as {} in the database
-    assert_equal({}, read_events[0].data)
+    # nil data is serialized as JSON null and read back as nil.
+    assert_nil read_events[0].data
   end
 end
