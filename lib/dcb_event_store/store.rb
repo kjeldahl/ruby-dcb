@@ -65,19 +65,18 @@ module DcbEventStore
     private
 
     def paginated_read(query, after:)
-      sql, params = build_read_sql(query, after: after)
-
       Enumerator.new do |yielder|
-        offset = 0
+        cursor = after
         loop do
-          paginated = "#{sql} LIMIT #{BATCH_SIZE} OFFSET #{offset}"
-          result = @conn.exec_params(paginated, params)
+          sql, params = build_read_sql(query, after: cursor)
+          result = @conn.exec_params("#{sql} LIMIT #{BATCH_SIZE}", params)
           break if result.ntuples.zero?
 
-          result.each { |row| yielder << row_to_sequenced_event(row) }
+          result.each do |row|
+            cursor = row["sequence_position"].to_i
+            yielder << row_to_sequenced_event(row)
+          end
           break if result.ntuples < BATCH_SIZE
-
-          offset += BATCH_SIZE
         end
       end
     end
