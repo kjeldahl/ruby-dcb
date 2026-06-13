@@ -110,14 +110,40 @@ module DcbEventStore
       )
     end
 
+    # Parses a PostgreSQL text array literal (e.g. {a,b} or {"a","b,c"}) into a
+    # Ruby array of strings. Returns [] for nil or the empty array literal.
+    #
+    # Examples:
+    #   parse_pg_array('{a,b}')       => ["a", "b"]
+    #   parse_pg_array('{"a\"b"}')    => ["a\"b"]
+    #   parse_pg_array(nil)           => []
     def parse_pg_array(str)
-      return [] if str.nil? || str == "{}"
+      return [] if str.nil?
 
-      str.delete_prefix("{").delete_suffix("}").split(",").map { |s| s.delete('"') }
+      pg_array_decoder.decode(str)
     end
 
+    # Converts a Ruby array into a PostgreSQL text array literal, escaping
+    # special characters so it round-trips through a text[] column or bind
+    # parameter.
+    #
+    # Examples:
+    #   to_pg_array(["a", "b"]) => '{a,b}'
+    #   to_pg_array(['a"b'])    => '{"a\"b"}'
+    #   to_pg_array([])         => '{}'
     def to_pg_array(arr)
-      "{#{arr.join(',')}}"
+      pg_array_encoder.encode(arr.map(&:to_s))
+    end
+
+    # PG's text array codec implements the full array grammar (quoting,
+    # backslash escaping, embedded commas, braces, whitespace, empty strings).
+    # Built lazily so requiring the gem never references PG at load time.
+    def pg_array_decoder
+      @pg_array_decoder ||= PG::TextDecoder::Array.new
+    end
+
+    def pg_array_encoder
+      @pg_array_encoder ||= PG::TextEncoder::Array.new
     end
 
     def acquire_locks!(condition)
@@ -174,7 +200,7 @@ module DcbEventStore
                       "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
         insert_params.push(
           event.id, event.type, JSON.generate(event.data),
-          "{#{event.tags.join(',')}}",
+          to_pg_array(event.tags),
           event.causation_id, event.correlation_id, 1
         )
       end
@@ -190,7 +216,7 @@ module DcbEventStore
             ON CONFLICT (event_id) DO NOTHING
             RETURNING sequence_position, created_at
           SQL
-          [event.id, event.type, JSON.generate(event.data), "{#{event.tags.join(',')}}",
+          [event.id, event.type, JSON.generate(event.data), to_pg_array(event.tags),
            event.causation_id, event.correlation_id, 1]
         )
         next nil if result.ntuples.zero?
