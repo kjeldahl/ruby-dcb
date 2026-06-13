@@ -49,6 +49,37 @@ jobs:
           path: coverage/
           retention-days: 30
 
+  mutant:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb dcb_event_store_test
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Run mutation tests
+        # The pinned Bundler does not expose mutant's bin wrapper, so resolve
+        # the mutant-ruby executable via Gem.bin_path and load it directly.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            bundle exec ruby -e 'load Gem.bin_path("mutant", "mutant-ruby")' -- run --since "origin/${{ github.base_ref }}"
+          else
+            bundle exec ruby -e 'load Gem.bin_path("mutant", "mutant-ruby")' -- run
+          fi
+
   coverage-report:
     needs: test
     runs-on: ubuntu-latest
