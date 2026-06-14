@@ -84,7 +84,7 @@ module DcbEventStore
     end
 
     def record_subscribe(event, tags)
-      phase = event.payload[:phase]
+      phase = event.payload.fetch(:phase)
       delivered = event.payload.fetch(:event_count, 1)
       if delivered.positive?
         appsignal.increment_counter(metric("subscribe", "delivered"), delivered, tags.merge(phase: phase))

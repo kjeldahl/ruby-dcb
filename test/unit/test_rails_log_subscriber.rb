@@ -30,6 +30,16 @@ class TestRailsLogSubscriber < Minitest::Test
     line = visible(@io.string)
     assert_includes line, "DEBUG"
     assert_includes line, "  DCB Append (512.4ms)  store=DcbEventStore::Store event_count=2"
+    refute_includes line, "error="
+  end
+
+  def test_formats_array_subclasses_like_arrays
+    subscriber = DcbEventStore::RailsLogSubscriber.new(logger: @logger)
+    array_like = Class.new(Array).new(%w[A B])
+
+    subscriber.call(build_event(payload: {types: array_like}))
+
+    assert_includes visible(@io.string), "types=[A,B]"
   end
 
   def test_humanizes_multiword_event_names
