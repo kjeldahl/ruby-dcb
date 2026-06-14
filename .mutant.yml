@@ -14,6 +14,9 @@ requires:
   - ./test/unit/test_rails_log_subscriber
   - ./test/unit/test_appsignal_subscriber
   - ./test/unit/test_instrumentation
+  - ./test/unit/test_pg_array_codec
+  - ./test/unit/test_sql_builder
+  - ./test/unit/test_lock_keys
   - ./test/integration/test_store_append
   - ./test/integration/test_store_read
   - ./test/integration/test_read_from
@@ -42,5 +45,18 @@ matcher:
     - DcbEventStore::RailsLogSubscriber*
     - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
-# TODO: Needs refactor before being added to mutant testing
+    # Pure collaborators extracted from Store: SQL building, advisory-lock key
+    # derivation and PG array codec. Fast to mutate (no live PG) and fully
+    # covered by dedicated unit tests.
+    - DcbEventStore::PgArrayCodec*
+    - DcbEventStore::Store::SqlBuilder*
+    - DcbEventStore::Store::LockKeys*
+# Store itself and its RowMapper are left out on purpose: what remains is thin
+# PG glue (transactions, exec_params, LISTEN/NOTIFY) and row mapping over
+# trusted SELECT * rows. Their mutations are dominated by equivalent edits --
+# SQL-string tweaks, row["x"] -> row.fetch("x"), .to_i -> Integer(...) -- that
+# only differ on inputs Postgres never produces, so pinning them would mean
+# contrived, out-of-contract tests. Both are covered by unit and integration
+# tests; the genuinely branching logic now lives in the pure subjects above.
 #    - DcbEventStore::Store*
+#    - DcbEventStore::Store::RowMapper*
