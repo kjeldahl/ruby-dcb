@@ -4,6 +4,25 @@ require "securerandom"
 # Verifies the instrumentation events emitted by stores, projections and
 # decision models. Each test swaps in a fresh Notifications instance so the
 # global instrumentation of other tests is unaffected.
+# Minimal instrumentation engine that records the names it is asked to
+# instrument and answers #listening? with a fixed value, so tests can assert
+# whether a code path consulted/used instrumentation at all.
+class RecordingInstrumentation
+  attr_reader :instrumented
+
+  def initialize(listening:)
+    @listening = listening
+    @instrumented = []
+  end
+
+  def listening?(_name) = @listening
+
+  def instrument(name, payload = {})
+    @instrumented << name
+    yield payload
+  end
+end
+
 class InstrumentationTestCase < Minitest::Test
   def setup
     @events = []
@@ -121,6 +140,21 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
 
     assert_equal %w[read.dcb read.dcb], @events.map(&:name)
     assert(@events.all? { |e| e.payload[:event_count] == 1 })
+  end
+
+  def test_read_instrumented_for_a_pattern_specific_subscriber
+    @store.append([DcbEventStore::Event.new(type: "A")])
+
+    # Only a subscriber whose pattern matches READ_EVENT exactly is
+    # listening; instrument_read must consult that exact name, not a
+    # catch-all, so the read is still wrapped.
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    received = []
+    DcbEventStore.instrumentation.subscribe("read.dcb") { |event| received << event }
+
+    @store.read(DcbEventStore::Query.all).to_a
+
+    assert_equal ["read.dcb"], received.map(&:name)
   end
 
   def test_read_instrumentation_is_decided_when_the_read_is_issued
@@ -243,6 +277,20 @@ class TestSubscribeInstrumentation < InstrumentationTestCase
     assert_nil emitted[0].payload[:max_lag]
   end
 
+  def test_no_op_append_runs_no_delivery_round
+    store = DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :batch)
+    id = SecureRandom.uuid
+    store.subscribe(DcbEventStore::Query.all) { |event| event }
+    store.append([DcbEventStore::Event.new(type: "A", id: id)])
+    @events.clear
+
+    # Re-appending the same id is idempotent: nothing is stored, so the
+    # listeners must not be woken and no delivery round is emitted.
+    store.append([DcbEventStore::Event.new(type: "A", id: id)])
+
+    assert_empty subscribe_events
+  end
+
   def test_instrumentation_is_decided_per_delivery_round
     store = DcbEventStore::InMemoryStore.new
 
@@ -257,6 +305,37 @@ class TestSubscribeInstrumentation < InstrumentationTestCase
 
     assert_equal 1, late.size
     assert_equal :live, late[0].payload[:phase]
+  end
+
+  def test_batch_mode_max_lag_reflects_oldest_event
+    store = DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :batch)
+    store.append([DcbEventStore::Event.new(type: "A")])
+    sleep 0.05
+    store.append([DcbEventStore::Event.new(type: "B")])
+    @events.clear
+
+    store.subscribe(DcbEventStore::Query.all) { |event| event }
+
+    emitted = subscribe_events
+    assert_equal 1, emitted.size
+    # A was stored ~0.05s before this catch-up round; max_lag must reflect
+    # that oldest, largest lag rather than the most recently stored event.
+    assert_operator emitted[0].payload[:max_lag], :>=, 0.04
+  end
+
+  def test_not_listening_delivers_without_instrumenting_subscribe
+    spy = RecordingInstrumentation.new(listening: false)
+    DcbEventStore.instrumentation = spy
+    store = DcbEventStore::InMemoryStore.new
+    received = []
+
+    store.subscribe(DcbEventStore::Query.all) { |event| received << event }
+    store.append([DcbEventStore::Event.new(type: "A")])
+
+    # Delivery still happens, but with nobody listening the subscribe round
+    # is not instrumented at all (no lag computed, no event published).
+    assert_equal ["A"], received.map(&:type)
+    refute_includes spy.instrumented, "subscribe.dcb"
   end
 
   def test_invalid_subscribe_instrumentation_mode_raises

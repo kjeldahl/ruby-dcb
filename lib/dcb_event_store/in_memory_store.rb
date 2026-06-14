@@ -40,7 +40,7 @@ module DcbEventStore
     end
 
     def subscribe(query, after: nil, &block)
-      listener = { query: query, last_position: after || 0, block: block }
+      listener = { query: query, last_position: after, block: block }
       deliver(listener, :catch_up)
       @listeners << listener
       nil
@@ -52,9 +52,9 @@ module DcbEventStore
       Enumerator.new do |yielder|
         index = 0
         while index < @rows.length
-          row = @rows[index]
+          row = @rows.fetch(index)
           index += 1
-          next if after && row[:sequence_position] <= after
+          next if after && row.fetch(:sequence_position) <= after
           next unless matches?(query, row)
 
           yielder << row_to_sequenced_event(row)
@@ -84,11 +84,11 @@ module DcbEventStore
 
     def row_to_appended_event(event, row)
       SequencedEvent.new(
-        sequence_position: row[:sequence_position],
+        sequence_position: row.fetch(:sequence_position),
         type: event.type,
         data: event.data,
         tags: event.tags,
-        created_at: row[:created_at],
+        created_at: row.fetch(:created_at),
         id: event.id,
         causation_id: event.causation_id,
         correlation_id: event.correlation_id,
@@ -97,21 +97,21 @@ module DcbEventStore
     end
 
     def row_to_sequenced_event(row)
-      type = row[:type]
-      data = JSON.parse(row[:data], symbolize_names: true)
-      version = row[:schema_version]
+      type = row.fetch(:type)
+      data = JSON.parse(row.fetch(:data), symbolize_names: true)
+      version = row.fetch(:schema_version)
 
       data, version = @upcaster.upcast(type, data, version) if @upcaster
 
       SequencedEvent.new(
-        sequence_position: row[:sequence_position],
+        sequence_position: row.fetch(:sequence_position),
         type: type,
         data: data,
-        tags: row[:tags],
-        created_at: row[:created_at],
-        id: row[:event_id],
-        causation_id: row[:causation_id],
-        correlation_id: row[:correlation_id],
+        tags: row.fetch(:tags),
+        created_at: row.fetch(:created_at),
+        id: row.fetch(:event_id),
+        causation_id: row.fetch(:causation_id),
+        correlation_id: row.fetch(:correlation_id),
         schema_version: version
       )
     end
@@ -125,8 +125,8 @@ module DcbEventStore
     def item_matches?(item, row)
       return false if item.event_types.empty? && item.tags.empty?
 
-      type_match = item.event_types.empty? || item.event_types.include?(row[:type])
-      tag_match = item.tags.all? { |tag| row[:tags].include?(tag) }
+      type_match = item.event_types.empty? || item.event_types.include?(row.fetch(:type))
+      tag_match = item.tags.all? { |tag| row.fetch(:tags).include?(tag) }
       type_match && tag_match
     end
 
@@ -134,15 +134,15 @@ module DcbEventStore
       query = condition.fail_if_events_match
       after = condition.after
       @rows.any? do |row|
-        (after.nil? || row[:sequence_position] > after) && matches?(query, row)
+        (after.nil? || row.fetch(:sequence_position) > after) && matches?(query, row)
       end
     end
 
     def deliver(listener, phase)
-      events = read_from(listener[:query], after: listener[:last_position])
-      instrument_subscribe(events, listener[:query], phase) do |event|
+      events = read_from(listener.fetch(:query), after: listener.fetch(:last_position))
+      instrument_subscribe(events, listener.fetch(:query), phase) do |event|
         listener[:last_position] = event.sequence_position
-        listener[:block].call(event)
+        listener.fetch(:block).call(event)
       end
     end
 

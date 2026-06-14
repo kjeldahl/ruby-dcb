@@ -80,6 +80,10 @@ class TestInMemoryStore < Minitest::Test
     assert_equal "Wanted", received[0].type
   end
 
+  def test_subscribe_returns_nil
+    assert_nil @store.subscribe(DcbEventStore::Query.all) { |event| event }
+  end
+
   def test_subscribe_each_event_delivered_once
     received = []
     @store.subscribe(DcbEventStore::Query.all) { |event| received << event }

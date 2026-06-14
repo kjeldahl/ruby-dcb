@@ -70,12 +70,12 @@ module DcbEventStore
 
     def body(event)
       parts = event.payload.map { |key, value| "#{key}=#{format_value(value)}" }
-      parts << "error=#{event.error.class} #{event.error.message}" if event.error
+      parts << "error=#{event.error.class} #{event.error}" if event.error
       parts.join(" ")
     end
 
     def format_value(value)
-      value.is_a?(Array) ? "[#{value.join(',')}]" : value.to_s
+      value.is_a?(Array) ? "[#{value.join(',')}]" : value
     end
 
     def colorize(text, color, bold: false)

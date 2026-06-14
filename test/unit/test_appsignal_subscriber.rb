@@ -1,4 +1,5 @@
 require_relative "../test_helper"
+require "minitest/mock"
 
 class TestAppsignalSubscriber < Minitest::Test
   cover "DcbEventStore::AppsignalSubscriber*"
@@ -81,10 +82,18 @@ class TestAppsignalSubscriber < Minitest::Test
   def test_condition_not_met_counts_a_conflict_and_an_error
     error = DcbEventStore::ConditionNotMet.new("conflicting event(s)")
 
-    @subscriber.call(build_event(payload: {condition: true}, error: error))
+    @subscriber.call(build_event(payload: {store: "DcbEventStore::Store", condition: true}, error: error))
 
-    assert_includes @appsignal.counters, ["dcb.append.conflicts", 1, {}]
-    assert_includes @appsignal.counters, ["dcb.append.errors", 1, {}]
+    assert_includes @appsignal.counters, ["dcb.append.conflicts", 1, {store: "Store"}]
+    assert_includes @appsignal.counters, ["dcb.append.errors", 1, {store: "Store"}]
+  end
+
+  def test_condition_not_met_subclasses_also_count_as_conflicts
+    subclass = Class.new(DcbEventStore::ConditionNotMet)
+
+    @subscriber.call(build_event(payload: {store: "DcbEventStore::Store"}, error: subclass.new("nope")))
+
+    assert(@appsignal.counters.any? { |name, _, _| name == "dcb.append.conflicts" })
   end
 
   def test_non_conflict_append_error_is_not_counted_as_conflict
@@ -185,6 +194,25 @@ class TestAppsignalSubscriber < Minitest::Test
 
     assert_equal "DcbEventStore::AppsignalSubscriber requires the appsignal gem; add it to your Gemfile",
                  error.message
+  end
+
+  def test_lazily_requires_the_appsignal_gem_and_uses_its_module
+    skip "appsignal constant already defined" if Object.const_defined?(:Appsignal)
+
+    subscriber = DcbEventStore::AppsignalSubscriber.new
+    fake_module = Module.new
+    Object.const_set(:Appsignal, fake_module)
+
+    loaded = nil
+    # Succeed only for the appsignal require, so the resolved receiver is the
+    # real Appsignal module (not the require's return value or a missing gem).
+    subscriber.stub(:require, ->(name) { name == "appsignal" || raise(LoadError) }) do
+      loaded = subscriber.send(:appsignal)
+    end
+
+    assert_same fake_module, loaded
+  ensure
+    Object.send(:remove_const, :Appsignal) if fake_module && Object.const_defined?(:Appsignal)
   end
 
   # --- end to end through a store ---

@@ -72,8 +72,9 @@ module DcbEventStore
 
     def subscribe_instrumentation_mode(mode)
       unless SUBSCRIBE_MODES.include?(mode)
+        valid = SUBSCRIBE_MODES.map(&:inspect).join(", ")
         raise ArgumentError,
-              "subscribe_instrumentation must be one of #{SUBSCRIBE_MODES.inspect}, got #{mode.inspect}"
+              "subscribe_instrumentation must be one of [#{valid}], got #{mode.inspect}"
       end
 
       mode
@@ -125,10 +126,11 @@ module DcbEventStore
         inner[:event_count] = 0
         events.each do |event|
           last_position = event.sequence_position
-          lag = Time.now - event.created_at
           inner[:event_count] += 1
           inner[:last_position] = last_position
-          inner[:max_lag] = lag if inner[:max_lag].nil? || lag > inner[:max_lag]
+          # Events arrive oldest-first (ascending position), so the first
+          # one carries the largest delivery lag for the round.
+          inner[:max_lag] ||= Time.now - event.created_at
           yield event
         end
       end

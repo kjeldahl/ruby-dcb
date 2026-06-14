@@ -5,6 +5,7 @@ requires:
   - ./test/unit/test_event
   - ./test/unit/test_query
   - ./test/unit/test_projection
+  - ./test/unit/test_decision_model
   - ./test/unit/test_upcaster
   - ./test/unit/test_client
   - ./test/unit/test_in_memory_store

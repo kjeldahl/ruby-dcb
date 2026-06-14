@@ -2,6 +2,7 @@ require_relative "../test_helper"
 require_relative "../support/instrumentation_contract"
 require "active_support"
 require "active_support/notifications"
+require "minitest/mock"
 require "stringio"
 
 # Runs the shared instrumentation contract against the
@@ -32,6 +33,37 @@ class TestActiveSupportInstrumentation < Minitest::Test
   def teardown
     super
     @as_subscriptions.each { |s| ActiveSupport::Notifications.unsubscribe(s) }
+  end
+
+  # --- lazy activesupport loading ---
+  #
+  # ActiveSupport is already loaded in this process, so the real require
+  # calls are no-ops. Construct via #allocate with a stubbed #require to
+  # exercise both the load and the missing-gem branches.
+
+  def test_requires_activesupport_on_construction
+    instance = DcbEventStore::ActiveSupportInstrumentation.allocate
+    required = []
+
+    instance.stub(:require, ->(name) { required << name }) do
+      instance.send(:initialize)
+    end
+
+    assert_equal ["active_support", "active_support/notifications"], required
+  end
+
+  def test_raises_a_helpful_error_when_activesupport_is_missing
+    instance = DcbEventStore::ActiveSupportInstrumentation.allocate
+
+    error = assert_raises(LoadError) do
+      instance.stub(:require, ->(_name) { raise LoadError }) do
+        instance.send(:initialize)
+      end
+    end
+
+    assert_equal "DcbEventStore::ActiveSupportInstrumentation requires the activesupport gem; " \
+                 "add it to your Gemfile or use DcbEventStore::Notifications instead",
+                 error.message
   end
 
   # --- native ActiveSupport::Notifications interop ---

@@ -22,6 +22,7 @@ class TestLogSubscriber < Minitest::Test
 
     assert_includes @io.string, "INFO"
     assert_includes @io.string, "append.dcb (512.35ms) event_count=2 event_types=[A,B]"
+    refute_includes @io.string, "error="
   end
 
   def test_logs_error_line_with_error_class_and_message
@@ -32,6 +33,15 @@ class TestLogSubscriber < Minitest::Test
 
     assert_includes @io.string, "ERROR"
     assert_includes @io.string, "append.dcb (512.35ms) error=DcbEventStore::ConditionNotMet conflicting event(s)"
+  end
+
+  def test_formats_array_subclasses_like_arrays
+    subscriber = DcbEventStore::LogSubscriber.new(logger: @logger)
+    array_like = Class.new(Array).new(%w[A B])
+
+    subscriber.call(build_event(payload: {types: array_like}))
+
+    assert_includes @io.string, "types=[A,B]"
   end
 
   def test_defaults_to_stdout_logger
