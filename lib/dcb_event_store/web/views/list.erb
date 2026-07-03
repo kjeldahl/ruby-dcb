@@ -1,0 +1,48 @@
+<form method="get" class="filters">
+  <select name="type">
+    <option value="">All types</option>
+    <% types.each do |t| -%>
+      <option value="<%= h(t) %>"<%= ' selected' if t == params.selected_type %>><%= h(t) %></option>
+    <% end -%>
+  </select>
+  <input type="text" name="tag" value="" placeholder="add tag e.g. order:1">
+  <% params.tags.each do |t| -%><input type="hidden" name="tag" value="<%= h(t) %>"><% end -%>
+  <input type="hidden" name="per_page" value="<%= params.per_page %>">
+  <button type="submit">Filter</button>
+</form>
+
+<% unless params.selected_type.empty? && params.tags.empty? -%>
+<p class="active-filters">
+  Filtering:
+  <% unless params.selected_type.empty? -%><span class="chip">type: <%= h(params.selected_type) %></span><% end -%>
+  <% params.tags.each do |t| -%><a class="chip" href="<%= remove_tag_url(t) %>" title="Remove filter"><%= h(t) %> &times;</a> <% end -%>
+  <a class="clear" href="<%= root_url %>">clear all</a>
+</p>
+<% end -%>
+
+<p class="meta"><%= total %> event(s)</p>
+
+<% if events.empty? -%>
+  <p class="empty">No events</p>
+<% else -%>
+<table>
+  <thead><tr><th>#</th><th>Type</th><th>Tags</th><th>Time</th><th>ID</th></tr></thead>
+  <tbody>
+    <% events.each do |e| -%>
+    <tr>
+      <td><a href="<%= event_url(e.sequence_position) %>"><%= e.sequence_position %></a></td>
+      <td><%= h(e.type) %></td>
+      <td><% e.tags.each do |tg| -%><a class="tag" href="<%= add_tag_url(tg) %>" title="Add to filter"><%= h(tg) %></a> <% end -%></td>
+      <td><%= format_time(e.created_at) %></td>
+      <td class="mono"><%= short(e.id) %></td>
+    </tr>
+    <% end -%>
+  </tbody>
+</table>
+
+<div class="pager">
+  <% if params.page > 1 -%><a href="<%= page_url(params.page - 1) %>">&larr; Newer</a><% end -%>
+  <span>Page <%= params.page %></span>
+  <% if params.page * params.per_page < total -%><a href="<%= page_url(params.page + 1) %>">Older &rarr;</a><% end -%>
+</div>
+<% end -%>

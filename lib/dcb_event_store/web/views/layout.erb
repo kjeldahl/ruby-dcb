@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCB Event Store</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 0; color: #1a1a1a; background: #fafafa; }
+  header { background: #1a1a2e; color: #fff; padding: 12px 20px; }
+  header a { color: #fff; text-decoration: none; font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  a { color: #3651d4; }
+  table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; }
+  th { background: #f2f2f5; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #555; }
+  tr:hover td { background: #f7f9ff; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #666; }
+  .tag { display: inline-block; background: #eef; color: #3651d4; border-radius: 4px;
+         padding: 1px 6px; font-size: 12px; margin: 0 2px 2px 0; text-decoration: none; }
+  a.tag:hover { background: #3651d4; color: #fff; }
+  .active-filters { margin: 8px 0 4px; color: #777; }
+  .chip { display: inline-block; background: #e7ecff; color: #3651d4; border-radius: 12px;
+          padding: 2px 10px; font-size: 12px; margin: 0 4px; text-decoration: none; }
+  a.chip:hover { background: #ffe7e7; color: #c0392b; }
+  .active-filters .clear { font-size: 12px; }
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filters select, .filters input, .filters button { padding: 6px 8px; font-size: 14px; }
+  .meta { color: #777; margin: 8px 0 16px; }
+  .empty { color: #999; padding: 40px; text-align: center; background: #fff; }
+  .pager { display: flex; gap: 16px; align-items: center; margin-top: 16px; }
+  dl { display: grid; grid-template-columns: 160px 1fr; gap: 4px 12px; background: #fff;
+       padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  dt { font-weight: 600; color: #555; }
+  pre { background: #1a1a2e; color: #e8e8f0; padding: 16px; overflow-x: auto; border-radius: 6px; }
+  h2 .pos { color: #999; font-weight: 400; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e8e8f0; background: #16161e; }
+    table, .empty, dl { background: #1e1e2a; box-shadow: none; }
+    th { background: #26263440; color: #aaa; }
+    td { border-color: #2a2a38; }
+    tr:hover td { background: #24243400; }
+  }
+</style>
+</head>
+<body>
+<header><a href="<%= root_url %>">DCB Event Store</a></header>
+<main><%= content %></main>
+</body>
+</html>
