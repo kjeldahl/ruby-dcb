@@ -31,7 +31,8 @@ module DcbEventStore
 
     def format_event(event)
       parts = ["#{event.name} (#{(event.duration * 1000).round(2)}ms)"]
-      parts += event.payload.map { |key, value| "#{key}=#{format_value(value)}" }
+      parts += event.payload.reject { |_key, value| value.nil? }
+                    .map { |key, value| "#{key}=#{format_value(value)}" }
       parts << "error=#{event.error.class} #{event.error}" if event.error
       parts.join(" ")
     end

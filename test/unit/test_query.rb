@@ -63,6 +63,48 @@ class TestQuery < Minitest::Test
     refute_equal q, "not a query"
   end
 
+  def test_query_item_to_s_types_only
+    qi = DcbEventStore::QueryItem.new(event_types: %w[A B])
+    assert_equal "A,B", qi.to_s
+  end
+
+  def test_query_item_to_s_types_and_tags
+    qi = DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t:1"])
+    assert_equal "A,B{t:1}", qi.to_s
+  end
+
+  def test_query_item_to_s_tags_only
+    qi = DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1", "t:2"])
+    assert_equal "{t:1,t:2}", qi.to_s
+  end
+
+  def test_query_item_to_s_empty_is_any
+    qi = DcbEventStore::QueryItem.new(event_types: [], tags: [])
+    assert_equal "any", qi.to_s
+  end
+
+  def test_query_item_inspect_matches_to_s
+    qi = DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["t:1"])
+    assert_equal qi.to_s, qi.inspect
+  end
+
+  def test_query_all_to_s
+    assert_equal "Query.all", DcbEventStore::Query.all.to_s
+  end
+
+  def test_query_to_s_joins_items_with_pipe
+    q = DcbEventStore::Query.new([
+      DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t:1"]),
+      DcbEventStore::QueryItem.new(event_types: ["C"])
+    ])
+    assert_equal "Query[A,B{t:1}|C]", q.to_s
+  end
+
+  def test_query_inspect_matches_to_s
+    q = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    assert_equal q.to_s, q.inspect
+  end
+
   def test_append_condition_defaults_after_nil
     ac = DcbEventStore::AppendCondition.new(fail_if_events_match: DcbEventStore::Query.all)
     assert_nil ac.after

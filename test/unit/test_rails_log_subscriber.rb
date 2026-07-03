@@ -99,6 +99,15 @@ class TestRailsLogSubscriber < Minitest::Test
                     "DCB Append (512.4ms)  condition=true error=DcbEventStore::ConditionNotMet conflicting event(s)"
   end
 
+  def test_omits_nil_payload_values
+    subscriber = DcbEventStore::RailsLogSubscriber.new(logger: @logger, colorize: false)
+
+    subscriber.call(build_event(name: "read.dcb", payload: {query: "Query.all", after: nil, event_count: 1}))
+
+    assert_includes visible(@io.string), "DCB Read (512.4ms)  query=Query.all event_count=1"
+    refute_includes visible(@io.string), "after="
+  end
+
   def test_formats_array_values_like_the_query_log
     subscriber = DcbEventStore::RailsLogSubscriber.new(logger: @logger, colorize: false)
 
