@@ -44,6 +44,15 @@ class TestLogSubscriber < Minitest::Test
     assert_includes @io.string, "types=[A,B]"
   end
 
+  def test_omits_nil_payload_values
+    subscriber = DcbEventStore::LogSubscriber.new(logger: @logger)
+
+    subscriber.call(build_event(payload: {query: "Query.all", after: nil, event_count: 1}))
+
+    assert_includes @io.string, "query=Query.all event_count=1"
+    refute_includes @io.string, "after="
+  end
+
   def test_defaults_to_stdout_logger
     assert_output(/append\.dcb/) do
       DcbEventStore::LogSubscriber.new.call(build_event)
