@@ -482,6 +482,35 @@ It implements the same API and semantics — append conditions, idempotent write
 
 Limitations: it is **single-threaded** (no locking; intended for tests only), reads scan the whole log, and `subscribe` never blocks — it catches up and then delivers matching events synchronously as they are appended. For tests that need real SQL without a server, use `SqliteStore` on a temporary file.
 
+### Browsing events (web UI)
+
+An optional, read-only web browser for inspecting the stream in development. It is a plain **Rack app** - no Rails/Sinatra required, mountable in any of them - and is **not** loaded by default, so the core gem gains no runtime dependency. Require it explicitly and point it at a connection:
+
+```ruby
+# config.ru (standalone) or a Rails initializer
+require "dcb_event_store/web"
+
+# Supply a raw pg connection or a callable returning one:
+DcbEventStore::Web.connection = -> { PG.connect(dbname: "my_db") }
+# In an ActiveRecord app you can leave it unset to borrow AR's connection.
+```
+
+Mount it:
+
+```ruby
+# Rails - config/routes.rb
+mount DcbEventStore::Web => "/dcb"
+
+# Standalone - config.ru
+run DcbEventStore::Web   # then: bundle exec rackup (needs the `rackup` gem: `bundle config set --local with web`)
+```
+
+`GET /` lists events newest-first with type/tag filtering and paging (`?type=`, `?tag=`, `?page=`, `?per_page=`); `GET /events/:position` shows a single event's full payload, tags, ids and schema version. It only ever reads - see `examples/config.ru`.
+
+**Namespaces.** Each [namespace](#namespaces-several-event-logs-in-one-database) is browsed on its own: pick one with the switcher in the header or `?ns=billing` on any URL (links keep it). Without `ns` the default namespace is shown. The namespaces on offer are discovered from the database (every `events` / `<name>_events` table with the event columns); pin the list instead with `DcbEventStore::Web.namespaces = [nil, "billing"]` (`nil` is the default one). A namespace outside the list is a 404.
+
+**Snapshots.** `GET /snapshots` lists the namespace's [projection snapshots](#snapshots) most recently written first: key, position, how far behind the log head it is, and when it was written (`?q=` keeps keys containing the text, e.g. `?q=course_subscriptions/v1`; `?page=`, `?per_page=`). `GET /snapshot?key=...` shows one snapshot's state as JSON and links to the event at its position. A database without the snapshots table just says so.
+
 ## Tests
 
 ```bash
