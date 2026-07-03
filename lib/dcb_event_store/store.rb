@@ -88,7 +88,7 @@ module DcbEventStore
     end
 
     def append_with_condition(events, condition)
-      cond_sql, cond_params = @sql.condition_sql(condition.fail_if_events_match, condition.after)
+      cond_sql, cond_params = @sql.count_sql(condition.fail_if_events_match, after: condition.after)
       value_rows, insert_params = @sql.values_clause(events, cond_params.size)
 
       result = @conn.exec_params(

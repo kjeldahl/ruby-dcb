@@ -272,7 +272,32 @@ client = DcbEventStore::Client.new(store)
 
 It implements the same API and semantics — append conditions, idempotent writes, query filtering, upcasting — verified by a shared contract suite (`test/support/store_contract.rb`) that runs against both implementations, plus a side-by-side equivalence test.
 
-Limitations: it is **single-threaded** (no locking; intended for tests only), and `subscribe` does not block on `LISTEN/NOTIFY` — it catches up and then delivers matching events synchronously as they are appended.
+Limitations: it is **single-threaded** (no locking; intended for tests only), and `subscribe` does not block on `LISTEN/NOTIFY` - it catches up and then delivers matching events synchronously as they are appended.
+
+### Browsing events (web UI)
+
+An optional, read-only web browser for inspecting the stream in development. It is a plain **Rack app** - no Rails/Sinatra required, mountable in any of them - and is **not** loaded by default, so the core gem gains no runtime dependency. Require it explicitly and point it at a connection:
+
+```ruby
+# config.ru (standalone) or a Rails initializer
+require "dcb_event_store/web"
+
+# Supply a raw pg connection or a callable returning one:
+DcbEventStore::Web.connection = -> { PG.connect(dbname: "my_db") }
+# In an ActiveRecord app you can leave it unset to borrow AR's connection.
+```
+
+Mount it:
+
+```ruby
+# Rails - config/routes.rb
+mount DcbEventStore::Web => "/dcb"
+
+# Standalone - config.ru
+run DcbEventStore::Web   # then: bundle exec rackup (needs the `rackup` gem)
+```
+
+`GET /` lists events newest-first with type/tag filtering and paging (`?type=`, `?tag=`, `?page=`, `?per_page=`); `GET /events/:position` shows a single event's full payload, tags, ids and schema version. It only ever reads - see `examples/config.ru`.
 
 ## Tests
 

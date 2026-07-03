@@ -74,28 +74,86 @@ class TestSqlBuilder < Minitest::Test
     assert_equal ["{A}", 3], params
   end
 
-  # --- condition_sql ---
+  # --- read_sql ordering / paging (browser) ---
 
-  def test_condition_sql_match_all
-    sql, params = @builder.condition_sql(DcbEventStore::Query.all, nil)
+  def test_read_sql_order_desc
+    sql, params = @builder.read_sql(DcbEventStore::Query.all, after: nil, order: :desc)
+    assert_equal "SELECT * FROM events ORDER BY sequence_position DESC", sql
+    assert_equal [], params
+  end
+
+  def test_read_sql_limit
+    sql, params = @builder.read_sql(DcbEventStore::Query.all, after: nil, limit: 25)
+    assert_equal "SELECT * FROM events ORDER BY sequence_position ASC LIMIT 25", sql
+    assert_equal [], params
+  end
+
+  def test_read_sql_offset
+    sql, params = @builder.read_sql(DcbEventStore::Query.all, after: nil, offset: 50)
+    assert_equal "SELECT * FROM events ORDER BY sequence_position ASC OFFSET 50", sql
+    assert_equal [], params
+  end
+
+  def test_read_sql_desc_limit_offset_combined
+    sql, params = @builder.read_sql(DcbEventStore::Query.all, after: nil, order: :desc, limit: 25, offset: 50)
+    assert_equal "SELECT * FROM events ORDER BY sequence_position DESC LIMIT 25 OFFSET 50", sql
+    assert_equal [], params
+  end
+
+  def test_read_sql_desc_limit_with_filter
+    sql, params = @builder.read_sql(query([item(event_types: ["A"])]), after: nil, order: :desc, limit: 10)
+    expected = "SELECT * FROM events WHERE (type = ANY($1::text[])) " \
+               "ORDER BY sequence_position DESC LIMIT 10"
+    assert_equal expected, sql
+    assert_equal ["{A}"], params
+  end
+
+  def test_read_sql_rejects_unknown_order
+    error = assert_raises(ArgumentError) do
+      @builder.read_sql(DcbEventStore::Query.all, after: nil, order: :sideways)
+    end
+    assert_equal "order must be :asc or :desc", error.message
+  end
+
+  def test_read_sql_coerces_numeric_string_limit_and_offset
+    sql, = @builder.read_sql(DcbEventStore::Query.all, after: nil, limit: "25", offset: "50")
+    assert_equal "SELECT * FROM events ORDER BY sequence_position ASC LIMIT 25 OFFSET 50", sql
+  end
+
+  def test_read_sql_rejects_non_integer_limit
+    assert_raises(ArgumentError) do
+      @builder.read_sql(DcbEventStore::Query.all, after: nil, limit: "25; DROP TABLE events")
+    end
+  end
+
+  def test_read_sql_rejects_non_integer_offset
+    assert_raises(ArgumentError) do
+      @builder.read_sql(DcbEventStore::Query.all, after: nil, offset: "0 OR 1=1")
+    end
+  end
+
+  # --- count_sql ---
+
+  def test_count_sql_match_all
+    sql, params = @builder.count_sql(DcbEventStore::Query.all)
     assert_equal "SELECT COUNT(*) FROM events", sql
     assert_equal [], params
   end
 
-  def test_condition_sql_with_where
-    sql, params = @builder.condition_sql(query([item(event_types: ["A"])]), nil)
+  def test_count_sql_with_where
+    sql, params = @builder.count_sql(query([item(event_types: ["A"])]))
     assert_equal "SELECT COUNT(*) FROM events WHERE (type = ANY($1::text[]))", sql
     assert_equal ["{A}"], params
   end
 
-  def test_condition_sql_with_after
-    sql, params = @builder.condition_sql(query([item(event_types: ["A"])]), 5)
+  def test_count_sql_with_after
+    sql, params = @builder.count_sql(query([item(event_types: ["A"])]), after: 5)
     assert_equal "SELECT COUNT(*) FROM events WHERE ((type = ANY($1::text[]))) AND sequence_position > $2", sql
     assert_equal ["{A}", 5], params
   end
 
-  def test_condition_sql_match_all_with_after
-    sql, params = @builder.condition_sql(DcbEventStore::Query.all, 9)
+  def test_count_sql_match_all_with_after
+    sql, params = @builder.count_sql(DcbEventStore::Query.all, after: 9)
     assert_equal "SELECT COUNT(*) FROM events WHERE sequence_position > $1", sql
     assert_equal [9], params
   end

@@ -18,6 +18,9 @@ requires:
   - ./test/unit/test_pg_array_codec
   - ./test/unit/test_sql_builder
   - ./test/unit/test_lock_keys
+  - ./test/unit/test_web_list_params
+  - ./test/unit/test_web_router
+  - ./test/unit/test_web_view
   - ./test/integration/test_store_append
   - ./test/integration/test_store_read
   - ./test/integration/test_read_from
@@ -52,6 +55,13 @@ matcher:
     - DcbEventStore::PgArrayCodec*
     - DcbEventStore::Store::SqlBuilder*
     - DcbEventStore::Store::LockKeys*
+    # Web browser: the pure param interpretation (paging + Query building) is
+    # the only genuinely branching logic; it is mutated here. The Router,
+    # View and ReadModel are thin glue (route dispatch, ERB rendering, PG
+    # exec over trusted rows) whose mutants are dominated by equivalent /
+    # whitespace / out-of-contract edits -- the same reason Store is excluded
+    # below. All three stay covered by the web unit and integration tests.
+    - DcbEventStore::Web::ListParams*
 # Store itself and its RowMapper are left out on purpose: what remains is thin
 # PG glue (transactions, exec_params, LISTEN/NOTIFY) and row mapping over
 # trusted SELECT * rows. Their mutations are dominated by equivalent edits --
