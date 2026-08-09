@@ -5,6 +5,7 @@ require_relative "dcb_event_store/store_instrumentation"
 require_relative "dcb_event_store/log_subscriber"
 require_relative "dcb_event_store/rails_log_subscriber"
 require_relative "dcb_event_store/appsignal_subscriber"
+require_relative "dcb_event_store/validation"
 require_relative "dcb_event_store/event"
 require_relative "dcb_event_store/sequenced_event"
 require_relative "dcb_event_store/query"
@@ -27,7 +28,14 @@ module DcbEventStore
     # Process-wide Notifications instance used by all instrumentation
     # emission points. Replaceable, e.g. with a test-local instance.
     attr_accessor :instrumentation
+
+    # Global flag to enable/disable event validation.
+    # When true, Event.new will validate type, data, and tags.
+    # Default is nil (disabled for backward compatibility).
+    # Set to true in production to enforce validation.
+    attr_accessor :validate_events
   end
 
   self.instrumentation = Notifications.new
+  self.validate_events = nil
 end
