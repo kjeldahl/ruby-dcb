@@ -69,7 +69,7 @@ module DcbEventStore
     end
 
     def body(event)
-      parts = event.payload.reject { |_key, value| value.nil? }
+      parts = event.payload.compact
                    .map { |key, value| "#{key}=#{format_value(value)}" }
       parts << "error=#{event.error.class} #{event.error}" if event.error
       parts.join(" ")

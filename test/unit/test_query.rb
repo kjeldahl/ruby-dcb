@@ -94,9 +94,9 @@ class TestQuery < Minitest::Test
 
   def test_query_to_s_joins_items_with_pipe
     q = DcbEventStore::Query.new([
-      DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t:1"]),
-      DcbEventStore::QueryItem.new(event_types: ["C"])
-    ])
+                                   DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t:1"]),
+                                   DcbEventStore::QueryItem.new(event_types: ["C"])
+                                 ])
     assert_equal "Query[A,B{t:1}|C]", q.to_s
   end
 
