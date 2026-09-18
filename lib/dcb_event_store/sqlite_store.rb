@@ -1,5 +1,7 @@
 require "json"
 
+require_relative "sql_store"
+
 module DcbEventStore
   # SQLite-backed store: the SqlStore hooks implemented against an
   # SQLite3::Database.
@@ -128,3 +130,9 @@ module DcbEventStore
     end
   end
 end
+
+# Loaded after the class body on purpose: each file below reopens
+# `class SqliteStore`, which would raise a superclass mismatch if it ran
+# before the `< SqlStore` definition above.
+require_relative "sqlite_store/dialect"
+require_relative "sqlite_store/schema"

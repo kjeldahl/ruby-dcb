@@ -1,3 +1,5 @@
+require_relative "sql_store"
+
 module DcbEventStore
   # PostgreSQL-backed store: the SqlStore hooks implemented against a live
   # PG connection.
@@ -109,3 +111,11 @@ module DcbEventStore
     end
   end
 end
+
+# Loaded after the class body on purpose: each file below reopens
+# `class PostgresStore`, which would raise a superclass mismatch if it ran
+# before the `< SqlStore` definition above.
+require_relative "postgres_store/array_codec"
+require_relative "postgres_store/dialect"
+require_relative "postgres_store/lock_keys"
+require_relative "postgres_store/schema"

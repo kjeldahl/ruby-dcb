@@ -1,6 +1,12 @@
 integration: minitest
 requires:
   - ./lib/dcb_event_store
+  # The backends are autoloaded, and mutant enumerates its subjects from the
+  # modules already loaded, so the backend files are required here explicitly
+  # -- without them the backend subjects below would simply not be found.
+  - ./lib/dcb_event_store/postgres_store
+  - ./lib/dcb_event_store/sqlite_store
+  - ./lib/dcb_event_store/store
   - ./test/test_helper
   - ./test/unit/test_event
   - ./test/unit/test_query

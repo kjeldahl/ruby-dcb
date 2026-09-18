@@ -136,6 +136,9 @@ Each step: `bundle exec rake` + `rubocop` green, one commit.
 - `examples/performance.rb` runs on the two SQL backends and refuses
   `DCB_BACKEND=memory` (whole-log scans per read, no cross-process sharing)
   rather than running `DCB_BACKEND=all` in one process (step 9).
+- The backend classes are `autoload`ed rather than required with the gem (a
+  review follow-up), so an application loads only the backend it constructs;
+  `.mutant.yml` requires them explicitly to keep them as subjects.
 - The deprecated aliases warn through `Module#deprecate_constant`, so the
   warning is Ruby's and appears per reference when the deprecation category is
   enabled, instead of a hand-rolled once-per-process `Kernel#warn` (step 9).

@@ -11,7 +11,7 @@ DCB is an alternative to stream-based event stores. Instead of partitioning even
   - [`pg`](https://rubygems.org/gems/pg) for PostgreSQL (`PostgresStore`)
   - [`sqlite3`](https://rubygems.org/gems/sqlite3) >= 2.0 for SQLite (`SqliteStore`), which bundles SQLite >= 3.45; SQLite >= 3.35 is the minimum (`RETURNING`)
 
-Each backend file loads its driver lazily, so an application that only uses one never needs the other installed.
+Each backend file loads its driver lazily, so an application that only uses one never needs the other installed. The backend classes and their collaborators are themselves loaded on first reference, so an application only loads the backend it constructs.
 
 ## Setup
 
