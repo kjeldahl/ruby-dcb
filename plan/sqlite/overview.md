@@ -17,8 +17,10 @@ Verified on SQLite 3.53 / `sqlite3` gem 2.9.6: `INSERT ... ON CONFLICT DO NOTHIN
   check + inserts atomic by construction. `LockKeys` stays PG-only.
 - **Append**: plain check-then-insert inside `BEGIN IMMEDIATE` (no CTE trick needed).
   Per-row `INSERT ... ON CONFLICT(event_id) DO NOTHING RETURNING`.
-- **Tags**: JSON array text column; containment via `json_each` double-NOT-EXISTS.
-  Optional later step: `event_tags` index table (GIN equivalent).
+- **Tags**: JSON array text column on `events` (read side) + `event_tags(tag, sequence_position)`
+  index table (query side, GIN equivalent). Containment: `sequence_position IN (SELECT
+  sequence_position FROM event_tags WHERE tag IN (SELECT value FROM json_each(?)) GROUP BY
+  sequence_position HAVING COUNT(*) = ?)`.
 - **Types filter**: `type IN (SELECT value FROM json_each(?))` -> fixed param count, mirrors
   PG `= ANY($n::text[])`.
 - **Subscribe**: polling. `poll_interval:` option (default 0.1s); check `PRAGMA data_version`
@@ -36,7 +38,7 @@ Verified on SQLite 3.53 / `sqlite3` gem 2.9.6: `INSERT ... ON CONFLICT DO NOTHIN
 - Poll interval default 0.1s. Confirmed.
 - Neutral PG integration tests move to shared contracts (step 3). Confirmed.
 - Examples via `DCB_BACKEND`. Confirmed.
-- Tag storage: pending (see step_08 benchmark).
+- Tag storage: **B** `event_tags` index table from the start (steps 4/5). Benchmark in step_08.
 
 ## Semantic differences vs PG (document in README)
 | | PostgresStore | SqliteStore |
@@ -45,7 +47,7 @@ Verified on SQLite 3.53 / `sqlite3` gem 2.9.6: `INSERT ... ON CONFLICT DO NOTHIN
 | subscribe wakeup | LISTEN/NOTIFY | poll `data_version` |
 | created_at precision | us | ms |
 | `:memory:` db | n/a | per-connection; use file DB for multi-conn/subscribe |
-| tag lookup | GIN index | scan (or `event_tags` step 8) |
+| tag lookup | GIN index | `event_tags` table |
 
 ## Target layout
 ```
@@ -82,7 +84,8 @@ regression (step 1 verifies).
 ```ruby
 placeholder(n)              # "$n" | "?"
 type_in(n)                  # "type = ANY($n::text[])" | "type IN (SELECT value FROM json_each(?))"
-tags_contain(n)             # "tags @> $n::text[]" | "NOT EXISTS (SELECT 1 FROM json_each(?) r WHERE NOT EXISTS (SELECT 1 FROM json_each(events.tags) t WHERE t.value = r.value))"
+tags_contain(tags, params)  # appends its params, returns clause. PG: "tags @> $n::text[]" (1 param).
+                            # SQLite: event_tags subquery (2 params: json list, count)
 encode_list(arr) / decode_list(str)   # PG array literal | JSON array
 insert_casts                # "::uuid, ::jsonb, ..." | none
 ```
@@ -97,7 +100,7 @@ insert_casts                # "::uuid, ::jsonb, ..." | none
 | 5 | `SqliteStore::Dialect` + `SqliteStore` read/append; StoreContract green | new |
 | 6 | Subscribe: base loop + `wait_for_append`; SQLite polling | PG refactor, SQLite new |
 | 7 | SQLite concurrency, pagination, append-only, subscribe tests | tests |
-| 8 | Optional: `event_tags` index table + benchmark | perf |
+| 8 | Benchmark PG vs SQLite, record in BENCHMARK.md | docs |
 | 9 | Examples backend switch, README/CLAUDE.md, CI, mutant subjects | docs/infra |
 
 Each step: `bundle exec rake` + `rubocop` green, one commit.

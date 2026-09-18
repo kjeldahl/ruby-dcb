@@ -1,4 +1,4 @@
-# Step 8 (optional): event_tags index table
+# Step 8: Benchmark record (decision: B, event_tags, taken in steps 4/5)
 
 ## Benchmark (sqlite 3.53, WAL, 20 types, 2 tags/event, count query = append condition check)
 | events | query | A json_each scan | B event_tags |

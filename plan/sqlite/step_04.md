@@ -19,16 +19,21 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
 CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events (correlation_id);
+CREATE TABLE IF NOT EXISTS event_tags (
+  tag               TEXT NOT NULL,
+  sequence_position INTEGER NOT NULL REFERENCES events(sequence_position),
+  PRIMARY KEY (tag, sequence_position)
+) WITHOUT ROWID;
 CREATE TRIGGER IF NOT EXISTS enforce_append_only_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events table is append-only: UPDATE not allowed'); END;
 CREATE TRIGGER IF NOT EXISTS enforce_append_only_delete BEFORE DELETE ON events
   BEGIN SELECT RAISE(ABORT, 'events table is append-only: DELETE not allowed'); END;
+-- same two triggers on event_tags
 ```
 - `Schema.create!(db)`, `Schema.drop!(db)`, `Schema.configure!(db)`:
   `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `db.busy_timeout = 5000`,
   `db.results_as_hash = true`. `create!` calls `configure!`.
-- `Schema.truncate!(db)` for tests: `DELETE` blocked by trigger -> `DROP` + `create!`
-  (or `PRAGMA` disable triggers? no -> drop/create, simplest).
+- `Schema.drop!` drops both tables (event_tags first). Tests use fresh tempfile DB per test.
 - `test/support/sqlite_database.rb`: `SqliteDatabaseHelper`; `setup_db` uses a tempfile DB
   (`Dir.mktmpdir`), not `:memory:`, so multi-connection tests work.
 - `test/sqlite/test_schema.rb`: idempotent create, drop, triggers block UPDATE/DELETE.
