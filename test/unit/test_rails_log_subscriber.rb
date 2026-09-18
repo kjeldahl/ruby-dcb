@@ -25,11 +25,11 @@ class TestRailsLogSubscriber < Minitest::Test
   def test_renders_activerecord_style_label_with_duration_and_payload
     subscriber = DcbEventStore::RailsLogSubscriber.new(logger: @logger)
 
-    subscriber.call(build_event(payload: {store: "DcbEventStore::Store", event_count: 2}))
+    subscriber.call(build_event(payload: {store: "DcbEventStore::PostgresStore", event_count: 2}))
 
     line = visible(@io.string)
     assert_includes line, "DEBUG"
-    assert_includes line, "  DCB Append (512.4ms)  store=DcbEventStore::Store event_count=2"
+    assert_includes line, "  DCB Append (512.4ms)  store=DcbEventStore::PostgresStore event_count=2"
     refute_includes line, "error="
   end
 

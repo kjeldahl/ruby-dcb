@@ -319,7 +319,7 @@ module Performance
         Thread.new do
           c = PG.connect(dbname: "dcb_event_store_test")
           c.exec("SET client_min_messages TO warning")
-          s = DcbEventStore::Store.new(c)
+          s = DcbEventStore::PostgresStore.new(c)
           cl = DcbEventStore::Client.new(s)
           ops_per_thread.times do |oi|
             sid = "perf-#{base + ti * 1000 + oi}"
@@ -364,7 +364,7 @@ module Performance
             _, w = pipes[pi]
             c = PG.connect(dbname: "dcb_event_store_test")
             c.exec("SET client_min_messages TO warning")
-            s = DcbEventStore::Store.new(c)
+            s = DcbEventStore::PostgresStore.new(c)
             cl = DcbEventStore::Client.new(s)
             ok = 0
             fail_count = 0
@@ -442,7 +442,7 @@ module Performance
 
     seed!(conn, num_students, num_courses)
 
-    store = DcbEventStore::Store.new(conn)
+    store = DcbEventStore::PostgresStore.new(conn)
     run_benchmarks(conn, store, num_students, num_courses)
 
     puts

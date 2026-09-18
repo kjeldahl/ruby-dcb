@@ -1,6 +1,6 @@
 module DcbEventStore
-  class Store
-    # Builds the SQL strings and bind-parameter arrays the Store executes.
+  class SqlStore
+    # Builds the SQL strings and bind-parameter arrays a SqlStore executes.
     # Pure: every method is a function of its arguments (a Query, an
     # AppendCondition's parts, or the events to insert) and the injected
     # PgArrayCodec. No connection, no I/O — fast to unit and mutation test.

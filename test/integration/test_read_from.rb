@@ -2,7 +2,7 @@ require_relative "../test_helper"
 require_relative "../support/database"
 
 class TestReadFrom < Minitest::Test
-  cover "DcbEventStore::Store#read_from"
+  cover "DcbEventStore::SqlStore#read_from"
 
   include DatabaseHelper
 

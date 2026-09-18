@@ -7,7 +7,13 @@ SimpleCov.start do
   add_filter "/test/"
   add_filter "/examples/"
 
-  add_group "Core", ["lib/dcb_event_store.rb", "lib/dcb_event_store/store.rb", "lib/dcb_event_store/client.rb"]
+  add_group "Core", [
+    "lib/dcb_event_store.rb",
+    "lib/dcb_event_store/sql_store.rb",
+    "lib/dcb_event_store/postgres_store.rb",
+    "lib/dcb_event_store/store.rb",
+    "lib/dcb_event_store/client.rb"
+  ]
   add_group "Models", ["lib/dcb_event_store/event.rb", "lib/dcb_event_store/query.rb"]
   add_group "Features", [
     "lib/dcb_event_store/projection.rb",

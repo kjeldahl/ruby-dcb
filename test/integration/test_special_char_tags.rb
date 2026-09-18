@@ -3,13 +3,13 @@ require_relative "../support/database"
 
 # End-to-end coverage for tags containing PostgreSQL array metacharacters
 # (commas, quotes, braces, backslashes, whitespace), empty strings, and
-# Unicode. Exercises the full production path: Store#append encodes via
-# to_pg_array into a real text[] column, and Store#read decodes it back via
+# Unicode. Exercises the full production path: #append encodes via
+# to_pg_array into a real text[] column, and #read decodes it back via
 # parse_pg_array. Also verifies tag containment queries (tags @> ...) still
 # match when the tag needs quoting.
 class TestSpecialCharTags < Minitest::Test
-  cover "DcbEventStore::Store#append"
-  cover "DcbEventStore::Store#read"
+  cover "DcbEventStore::SqlStore#append"
+  cover "DcbEventStore::SqlStore#read"
 
   include DatabaseHelper
 

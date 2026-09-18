@@ -10,6 +10,8 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a Post
 
 ## Project structure
 - `lib/dcb_event_store/` - core classes
+- `lib/dcb_event_store/sql_store/` - collaborators shared by SQL backends (`SqlBuilder`, `RowMapper`)
+- `lib/dcb_event_store/postgres_store/` - PG-only collaborators (`LockKeys`)
 - `test/unit/` - unit tests
 - `test/integration/` - integration tests (require live PG)
 - `test/concurrency/` - concurrency tests
@@ -24,15 +26,16 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a Post
 bundle exec rake test          # all tests
 bundle exec ruby test/integration/test_client.rb  # single file
 bundle exec mutant run                            # mutation testing (all subjects)
-bundle exec mutant run 'DcbEventStore::Store#append'  # single method
+bundle exec mutant run 'DcbEventStore::SqlStore#append'  # single method
 ```
 
 ## Key architecture
 - `Event` / `SequencedEvent` - domain event wrappers
 - `Query` / `QueryItem` - event stream filtering
 - `AppendCondition` - consistency boundary
-- `Store` - low-level PG operations
-- `InMemoryStore` - single-threaded drop-in for `Store`, for fast tests without PG (shared contract: `test/support/store_contract.rb`)
+- `SqlStore` - abstract base for SQL backends: instrumentation, paginated read, append orchestration, subscribe loop; subclasses implement the hooks (`with_write_transaction`, `acquire_locks!`, `count_matching`, `insert_event`, `fetch_batch`, `notify_appended`, `listen`/`unlisten`/`wait_for_append`)
+- `PostgresStore` - low-level PG operations (advisory locks, single-statement conditional append, LISTEN/NOTIFY). Was named `Store`; `Store` is kept as an alias
+- `InMemoryStore` - single-threaded drop-in for `PostgresStore`, for fast tests without PG (shared contract: `test/support/store_contract.rb`)
 - `Client` - high-level API (append, read, subscribe)
 - `Projection` / `DecisionModel` - higher-level abstractions
 - `Upcaster` - event schema migration on read

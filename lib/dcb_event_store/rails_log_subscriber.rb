@@ -8,7 +8,7 @@ module DcbEventStore
   # Rails logger at debug level. This adapter does the same for `*.dcb`
   # events so event-store activity blends into the surrounding query log:
   #
-  #   DCB Append (1.4ms)  store=DcbEventStore::Store event_count=2 ...
+  #   DCB Append (1.4ms)  store=DcbEventStore::PostgresStore event_count=2 ...
   #
   # It reuses the same ANSI color codes ActiveSupport::LogSubscriber uses,
   # but deliberately does not depend on Rails/ActiveSupport: when Rails is

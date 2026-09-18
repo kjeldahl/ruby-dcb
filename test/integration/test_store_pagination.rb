@@ -1,17 +1,17 @@
 require_relative "../test_helper"
 require_relative "../support/database"
 
-# Exercises Store#read pagination across multiple batches. Store reads in
+# Exercises SqlStore#read pagination across multiple batches. The store reads in
 # batches of BATCH_SIZE (1000) using keyset pagination on sequence_position,
 # so a result set larger than one batch must come back complete, in order,
 # and without duplicates or gaps at the batch boundary.
 class TestStorePagination < Minitest::Test
-  cover "DcbEventStore::Store#read"
-  cover "DcbEventStore::Store#read_from"
+  cover "DcbEventStore::SqlStore#read"
+  cover "DcbEventStore::SqlStore#read_from"
 
   include DatabaseHelper
 
-  BATCH_SIZE = DcbEventStore::Store::BATCH_SIZE
+  BATCH_SIZE = DcbEventStore::SqlStore::BATCH_SIZE
 
   def setup
     setup_db

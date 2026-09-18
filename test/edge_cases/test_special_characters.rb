@@ -3,7 +3,7 @@ require_relative "../support/database"
 
 # Tests for handling special characters in event data
 class TestSpecialCharacters < Minitest::Test
-  cover "DcbEventStore::Store*"
+  cover "DcbEventStore::PostgresStore*"
 
   include DatabaseHelper
 

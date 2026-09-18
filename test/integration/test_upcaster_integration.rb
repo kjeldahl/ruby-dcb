@@ -22,7 +22,7 @@ class TestUpcasterIntegration < Minitest::Test
       data.merge(email: "unknown@example.com")
     end
 
-    store_with_upcaster = DcbEventStore::Store.new(@conn, upcaster: upcaster)
+    store_with_upcaster = DcbEventStore::PostgresStore.new(@conn, upcaster: upcaster)
     event = store_with_upcaster.read(DcbEventStore::Query.all).first
 
     assert_equal "Alice", event.data[:name]

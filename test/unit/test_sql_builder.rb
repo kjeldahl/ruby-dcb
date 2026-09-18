@@ -2,10 +2,10 @@ require_relative "../test_helper"
 require "pg"
 
 class TestSqlBuilder < Minitest::Test
-  cover "DcbEventStore::Store::SqlBuilder*"
+  cover "DcbEventStore::SqlStore::SqlBuilder*"
 
   def setup
-    @builder = DcbEventStore::Store::SqlBuilder.new(DcbEventStore::PgArrayCodec.new)
+    @builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PgArrayCodec.new)
   end
 
   def query(items)

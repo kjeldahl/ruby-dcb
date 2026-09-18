@@ -2,7 +2,7 @@ require_relative "../test_helper"
 require_relative "../support/store_contract"
 
 # Runs the shared store contract against InMemoryStore, proving it behaves
-# like the PostgreSQL-backed Store (which runs the same contract in
+# like PostgresStore (which runs the same contract in
 # test/integration/test_store_equivalence.rb) — no database required.
 class TestInMemoryStore < Minitest::Test
   cover "DcbEventStore::InMemoryStore*"

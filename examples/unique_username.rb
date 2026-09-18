@@ -108,7 +108,7 @@ module UniqueUsername
     conn.exec("SET client_min_messages TO warning")
     DcbEventStore::Schema.create!(conn)
     conn.exec("TRUNCATE events RESTART IDENTITY")
-    store = DcbEventStore::Store.new(conn)
+    store = DcbEventStore::PostgresStore.new(conn)
     client = DcbEventStore::Client.new(store)
 
     puts "=== Unique Username (DCB Example) ==="

@@ -2,8 +2,8 @@ require "json"
 require "time"
 
 module DcbEventStore
-  class Store
-    # Maps PostgreSQL result rows (string-keyed, all-text columns) into
+  class SqlStore
+    # Maps SQL result rows (string-keyed, all-text columns) into
     # SequencedEvent objects, applying the optional upcaster on read.
     # Pure given a row hash and event — no connection — so it can be unit and
     # mutation tested with plain hashes.

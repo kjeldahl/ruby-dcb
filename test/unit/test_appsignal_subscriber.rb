@@ -37,9 +37,9 @@ class TestAppsignalSubscriber < Minitest::Test
   # --- duration and errors (every operation) ---
 
   def test_records_duration_distribution_in_ms_tagged_with_demodulized_store
-    @subscriber.call(build_event(name: "read.dcb", payload: {store: "DcbEventStore::Store"}))
+    @subscriber.call(build_event(name: "read.dcb", payload: {store: "DcbEventStore::PostgresStore"}))
 
-    assert_equal [["dcb.read.duration", 500.0, {store: "Store"}]], @appsignal.distributions
+    assert_equal [["dcb.read.duration", 500.0, {store: "PostgresStore"}]], @appsignal.distributions
     assert_empty @appsignal.counters
   end
 
@@ -51,10 +51,10 @@ class TestAppsignalSubscriber < Minitest::Test
 
   def test_error_increments_errors_counter_with_store_tag
     @subscriber.call(build_event(name: "read.dcb",
-                                 payload: {store: "DcbEventStore::Store"},
+                                 payload: {store: "DcbEventStore::PostgresStore"},
                                  error: RuntimeError.new("boom")))
 
-    assert_includes @appsignal.counters, ["dcb.read.errors", 1, {store: "Store"}]
+    assert_includes @appsignal.counters, ["dcb.read.errors", 1, {store: "PostgresStore"}]
   end
 
   def test_custom_prefix
@@ -68,9 +68,9 @@ class TestAppsignalSubscriber < Minitest::Test
   # --- append ---
 
   def test_append_counts_events_actually_written
-    @subscriber.call(build_event(payload: {store: "DcbEventStore::Store", event_count: 3, appended_count: 2}))
+    @subscriber.call(build_event(payload: {store: "DcbEventStore::PostgresStore", event_count: 3, appended_count: 2}))
 
-    assert_equal [["dcb.append.events", 2, {store: "Store"}]], @appsignal.counters
+    assert_equal [["dcb.append.events", 2, {store: "PostgresStore"}]], @appsignal.counters
   end
 
   def test_append_with_nothing_written_counts_no_events
@@ -82,16 +82,16 @@ class TestAppsignalSubscriber < Minitest::Test
   def test_condition_not_met_counts_a_conflict_and_an_error
     error = DcbEventStore::ConditionNotMet.new("conflicting event(s)")
 
-    @subscriber.call(build_event(payload: {store: "DcbEventStore::Store", condition: true}, error: error))
+    @subscriber.call(build_event(payload: {store: "DcbEventStore::PostgresStore", condition: true}, error: error))
 
-    assert_includes @appsignal.counters, ["dcb.append.conflicts", 1, {store: "Store"}]
-    assert_includes @appsignal.counters, ["dcb.append.errors", 1, {store: "Store"}]
+    assert_includes @appsignal.counters, ["dcb.append.conflicts", 1, {store: "PostgresStore"}]
+    assert_includes @appsignal.counters, ["dcb.append.errors", 1, {store: "PostgresStore"}]
   end
 
   def test_condition_not_met_subclasses_also_count_as_conflicts
     subclass = Class.new(DcbEventStore::ConditionNotMet)
 
-    @subscriber.call(build_event(payload: {store: "DcbEventStore::Store"}, error: subclass.new("nope")))
+    @subscriber.call(build_event(payload: {store: "DcbEventStore::PostgresStore"}, error: subclass.new("nope")))
 
     assert(@appsignal.counters.any? { |name, _, _| name == "dcb.append.conflicts" })
   end
@@ -108,11 +108,11 @@ class TestAppsignalSubscriber < Minitest::Test
   def test_live_per_event_delivery_records_delivered_and_lag_in_ms
     @subscriber.call(build_event(
                        name: "subscribe.dcb",
-                       payload: {store: "DcbEventStore::Store", phase: :live, sequence_position: 7, lag: 0.25}
+                       payload: {store: "DcbEventStore::PostgresStore", phase: :live, sequence_position: 7, lag: 0.25}
                      ))
 
-    assert_equal [["dcb.subscribe.delivered", 1, {store: "Store", phase: :live}]], @appsignal.counters
-    assert_includes @appsignal.distributions, ["dcb.subscribe.lag", 250.0, {store: "Store"}]
+    assert_equal [["dcb.subscribe.delivered", 1, {store: "PostgresStore", phase: :live}]], @appsignal.counters
+    assert_includes @appsignal.distributions, ["dcb.subscribe.lag", 250.0, {store: "PostgresStore"}]
   end
 
   def test_catch_up_delivery_is_counted_but_records_no_lag

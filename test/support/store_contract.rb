@@ -2,7 +2,7 @@ require "securerandom"
 
 # Shared behavioral contract for DcbEventStore stores.
 #
-# Every store implementation (PostgreSQL-backed Store, InMemoryStore) must
+# Every store implementation (PostgresStore, InMemoryStore) must
 # pass these tests with identical observable behavior. Including classes
 # must set @store in setup and define #build_store(upcaster: nil) returning
 # a fresh, empty store.

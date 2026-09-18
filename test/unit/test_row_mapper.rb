@@ -2,14 +2,14 @@ require_relative "../test_helper"
 require "pg"
 
 class TestRowMapper < Minitest::Test
-  cover "DcbEventStore::Store::RowMapper*"
+  cover "DcbEventStore::SqlStore::RowMapper*"
 
   def setup
     @codec = DcbEventStore::PgArrayCodec.new
   end
 
   def mapper(upcaster: nil)
-    DcbEventStore::Store::RowMapper.new(@codec, upcaster)
+    DcbEventStore::SqlStore::RowMapper.new(@codec, upcaster)
   end
 
   def row(overrides = {})

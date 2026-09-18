@@ -1,7 +1,7 @@
 require "zlib"
 
 module DcbEventStore
-  class Store
+  class PostgresStore
     # Derives the set of advisory-lock keys an append must hold, from its
     # optional AppendCondition. Pure: a function of the condition alone.
     #

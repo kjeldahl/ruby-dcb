@@ -2,7 +2,9 @@ require_relative "../test_helper"
 require_relative "../support/database"
 
 class TestStoreAppend < Minitest::Test
-  cover "DcbEventStore::Store#append"
+  cover "DcbEventStore::SqlStore#append"
+  # The PG-specific single-statement conditional append.
+  cover "DcbEventStore::PostgresStore#append_with_condition"
 
   include DatabaseHelper
 
