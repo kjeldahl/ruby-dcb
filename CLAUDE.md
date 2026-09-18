@@ -1,9 +1,9 @@
 # DCB Event Store
 
-Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a PostgreSQL backend.
+Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with PostgreSQL and SQLite backends.
 
 ## Stack
-- Ruby >= 3.3, `pg` gem
+- Ruby >= 3.3; `pg` and `sqlite3` are optional (dev) dependencies - an application adds the driver for the backend it uses
 - Minitest for tests
 - SimpleCov for coverage
 - Mutant (`mutant-minitest`) for mutation testing
@@ -11,16 +11,19 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a Post
 ## Project structure
 - `lib/dcb_event_store/` - core classes
 - `lib/dcb_event_store/sql_store/` - collaborators shared by SQL backends (`SqlBuilder`, `RowMapper`)
-- `lib/dcb_event_store/postgres_store/` - PG-only collaborators (`Dialect`, `ArrayCodec`, `LockKeys`)
+- `lib/dcb_event_store/postgres_store/` - PG-only collaborators (`Schema`, `Dialect`, `ArrayCodec`, `LockKeys`)
+- `lib/dcb_event_store/sqlite_store/` - SQLite-only collaborators (`Schema`, `Dialect`)
 - `test/unit/` - unit tests
 - `test/integration/` - integration tests (require live PG); backend-neutral cases live in the shared contracts, so these files keep only PG specifics (append-only triggers, LISTEN/NOTIFY subscribe, `text[]` round trip) plus the PG contract runners
+- `test/sqlite/` - SQLite backend tests (schema/triggers plus the SQLite contract runner); no server needed
 - `test/concurrency/` - concurrency tests
-- `test/support/` - shared test infra: `postgres_database.rb` (`PostgresDatabaseHelper`: connection, schema, `build_store`) and the backend contracts `store_contract.rb` (append/read/read_from/pagination/instrumentation), `special_characters_contract.rb`, `client_contract.rb`, `decision_model_contract.rb`, `upcaster_contract.rb`. Each contract is a module run against every backend: PG via `test/integration/`, InMemory via `test/unit/test_in_memory_store.rb`. Including classes set `@store` in setup and define `build_store(upcaster: nil)`
+- `test/support/` - shared test infra: `postgres_database.rb` (`PostgresDatabaseHelper`: connection, schema, `build_store`), `sqlite_database.rb` (`SqliteDatabaseHelper`: tempfile database, schema, `build_store`, extra connections) and the backend contracts `store_contract.rb` (append/read/read_from/pagination/instrumentation), `special_characters_contract.rb`, `client_contract.rb`, `decision_model_contract.rb`, `upcaster_contract.rb`, plus `in_memory_equivalence_contract.rb` (same scripted operations on the backend and on InMemoryStore, results compared). Each contract is a module run against every backend: PG via `test/integration/`, SQLite via `test/sqlite/test_sqlite_store.rb`, InMemory via `test/unit/test_in_memory_store.rb`. Including classes set `@store` in setup and define `build_store(upcaster: nil)`
 - `examples/` - usage examples
 
 ## Database
-- DB: `dcb_event_store_test`
-- Setup: `ruby -e "require_relative 'lib/dcb_event_store'; conn = PG.connect(dbname: 'dcb_event_store_test'); DcbEventStore::Schema.new(conn).create"`
+- PostgreSQL DB: `dcb_event_store_test`
+- Setup: `ruby -Ilib -rpg -e "require 'dcb_event_store'; DcbEventStore::PostgresStore::Schema.create!(PG.connect(dbname: 'dcb_event_store_test'))"`
+- SQLite needs no setup: the tests create a throwaway database file per test (`SqliteDatabaseHelper`), and `SqliteStore::Schema.create!(db)` installs the schema and the connection pragmas
 
 ## Running tests
 ```sh
@@ -36,6 +39,7 @@ bundle exec mutant run 'DcbEventStore::SqlStore#append'  # single method
 - `AppendCondition` - consistency boundary
 - `SqlStore` - abstract base for SQL backends: instrumentation, paginated read, append orchestration, subscribe loop; subclasses implement the hooks (`with_write_transaction`, `acquire_locks!`, `count_matching`, `insert_event`, `fetch_batch`, `notify_appended`, `listen`/`unlisten`/`wait_for_append`)
 - `PostgresStore` - low-level PG operations (advisory locks, single-statement conditional append, LISTEN/NOTIFY). Was named `Store`; `Store` is kept as an alias
+- `SqliteStore` - low-level SQLite operations: appends run in `BEGIN IMMEDIATE` (single writer database-wide, so the consistency check needs no extra locking), tags are indexed in a separate `event_tags(tag, sequence_position)` table standing in for PG's GIN index, and `subscribe` polls (placeholder `sleep poll_interval` until the polling loop lands)
 - `<Backend>Store::Dialect` - per-backend SQL details injected into `SqlBuilder`/`RowMapper` (placeholders, type/tag matching, insert casts, tag list encoding); `PostgresStore::Dialect` encodes lists through `PostgresStore::ArrayCodec` (was `PgArrayCodec`, kept as an alias)
 - `InMemoryStore` - single-threaded drop-in for `PostgresStore`, for fast tests without PG (runs the same shared contracts: `test/support/*_contract.rb`)
 - `Client` - high-level API (append, read, subscribe)

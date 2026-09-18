@@ -5,7 +5,7 @@ require_relative "../support/postgres_database"
 # and deletes. PG-specific because it bypasses the store API and asserts on
 # the database's own error.
 class TestAppendOnly < Minitest::Test
-  cover "DcbEventStore::Schema*"
+  cover "DcbEventStore::PostgresStore::Schema*"
 
   include PostgresDatabaseHelper
 

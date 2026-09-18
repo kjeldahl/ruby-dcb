@@ -294,6 +294,29 @@ module StoreContract
     assert_equal ["student:s1", "course:c1"], events[0].tags
   end
 
+  # A tag repeated on one event, and a duplicate tag in the query itself, must
+  # not change what matches: backends that count tag matches in an index table
+  # have to deduplicate both sides.
+  def test_read_matches_event_with_duplicate_tags
+    @store.append([DcbEventStore::Event.new(type: "A", tags: %w[dup dup])])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["dup"])
+                                     ])
+    events = @store.read(query).to_a
+    assert_equal 1, events.size
+    assert_equal %w[dup dup], events[0].tags
+  end
+
+  def test_read_with_duplicate_tags_in_query
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1", "t:1"])
+                                     ])
+    assert_equal 1, @store.read(query).to_a.size
+  end
+
   def test_read_or_across_query_items
     @store.append([DcbEventStore::Event.new(type: "A", tags: ["x:1"])])
     @store.append([DcbEventStore::Event.new(type: "B", tags: ["y:2"])])

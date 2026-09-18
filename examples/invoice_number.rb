@@ -53,7 +53,7 @@ module InvoiceNumber
   def self.run
     conn = PG.connect(dbname: "dcb_event_store_test")
     conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::Schema.create!(conn)
+    DcbEventStore::PostgresStore::Schema.create!(conn)
     conn.exec("TRUNCATE events RESTART IDENTITY")
     store = DcbEventStore::PostgresStore.new(conn)
     client = DcbEventStore::Client.new(store)

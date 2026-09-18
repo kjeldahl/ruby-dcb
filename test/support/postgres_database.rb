@@ -10,7 +10,7 @@ module PostgresDatabaseHelper
   def setup_db
     @conn = PostgresDatabaseHelper.connection
     @conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::Schema.create!(@conn)
+    DcbEventStore::PostgresStore::Schema.create!(@conn)
     @conn.exec("TRUNCATE events RESTART IDENTITY")
     @store = build_store
   end

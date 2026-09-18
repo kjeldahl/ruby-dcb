@@ -1,19 +1,21 @@
 # dcb_event_store
 
-A Ruby implementation of the [Dynamic Consistency Boundary (DCB)](https://dcb.events) event store pattern, backed by PostgreSQL.
+A Ruby implementation of the [Dynamic Consistency Boundary (DCB)](https://dcb.events) event store pattern, backed by PostgreSQL or SQLite.
 
 DCB is an alternative to stream-based event stores. Instead of partitioning events into streams with per-stream optimistic concurrency, DCB uses **tags** to define dynamic consistency boundaries and **append conditions** for cross-entity optimistic concurrency checks. A single event can belong to multiple consistency boundaries through its tags.
 
 ## Requirements
 
 - Ruby >= 3.3
-- PostgreSQL
+- PostgreSQL with the [`pg`](https://rubygems.org/gems/pg) gem, or SQLite (>= 3.35) with the [`sqlite3`](https://rubygems.org/gems/sqlite3) gem
+
+Neither driver is a dependency of this gem: add the one for the backend you use to your own Gemfile.
 
 ## Setup
 
 ```bash
 bundle install
-createdb dcb_event_store_test
+createdb dcb_event_store_test   # PostgreSQL only; SQLite needs no setup
 ```
 
 ## Usage
@@ -22,10 +24,22 @@ createdb dcb_event_store_test
 
 ```ruby
 require "dcb_event_store"
+require "pg"
 
 conn = PG.connect(dbname: "dcb_event_store_test")
-DcbEventStore::Schema.create!(conn)
+DcbEventStore::PostgresStore::Schema.create!(conn)
 store = DcbEventStore::PostgresStore.new(conn)
+```
+
+Or on SQLite, with the same API:
+
+```ruby
+require "dcb_event_store"
+require "sqlite3"
+
+db = SQLite3::Database.new("events.sqlite3")
+DcbEventStore::SqliteStore::Schema.create!(db)
+store = DcbEventStore::SqliteStore.new(db)
 ```
 
 **Events** have a type, data hash, and tags array:

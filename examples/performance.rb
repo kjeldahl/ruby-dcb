@@ -433,7 +433,7 @@ module Performance
 
     conn = PG.connect(dbname: "dcb_event_store_test")
     conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::Schema.create!(conn)
+    DcbEventStore::PostgresStore::Schema.create!(conn)
 
     puts "=" * 70
     puts "DCB Performance Benchmark"

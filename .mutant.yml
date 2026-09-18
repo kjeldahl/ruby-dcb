@@ -19,6 +19,7 @@ requires:
   - ./test/unit/test_postgres_dialect
   - ./test/unit/test_sql_builder
   - ./test/unit/test_sql_store
+  - ./test/unit/test_sqlite_dialect
   - ./test/unit/test_lock_keys
   - ./test/integration/test_append_only
   - ./test/integration/test_subscribe
@@ -26,6 +27,8 @@ requires:
   - ./test/integration/test_decision_model
   - ./test/integration/test_upcaster_integration
   - ./test/integration/test_store_equivalence
+  - ./test/sqlite/test_sqlite_store
+  - ./test/sqlite/test_schema
   - ./test/concurrency/test_concurrent_append
 jobs: 1
 usage: opensource
@@ -52,6 +55,7 @@ matcher:
     # unit tests.
     - DcbEventStore::SqlStore::SqlBuilder*
     - DcbEventStore::PostgresStore::Dialect*
+    - DcbEventStore::SqliteStore::Dialect*
     - DcbEventStore::PostgresStore::ArrayCodec*
     - DcbEventStore::PostgresStore::LockKeys*
 # PostgresStore, SqlStore and the RowMapper are left out on purpose: what
@@ -64,6 +68,12 @@ matcher:
 # tests; the genuinely branching logic now lives in the pure subjects above.
 # (Measured for reference: SqlStore's own methods kill ~87% -- the survivors
 # are hook-call and loop-shape equivalents in append/read/subscribe.)
+# SqliteStore's own methods are left out for the same reason (measured: 89%
+# coverage). The survivors are equivalent edits -- .to_i on a value SQLite
+# already types as Integer, row["x"] -> row.fetch("x"), dropping the rescue
+# that swallows a failing ROLLBACK -- plus the subscribe hooks, which are
+# placeholders until the polling loop lands.
 #    - DcbEventStore::PostgresStore*
+#    - DcbEventStore::SqliteStore*
 #    - DcbEventStore::SqlStore*
 #    - DcbEventStore::SqlStore::RowMapper*
