@@ -1,16 +1,18 @@
 require_relative "../test_helper"
-require_relative "../support/database"
+require_relative "../support/postgres_database"
 require_relative "../support/store_contract"
+require_relative "../support/special_characters_contract"
 
-# Runs the shared store contract against PostgresStore.
-# TestInMemoryStore runs the identical contract against InMemoryStore,
+# Runs the shared store contracts against PostgresStore.
+# TestInMemoryStore runs the identical contracts against InMemoryStore,
 # so a green run of both proves the two implementations are equivalent.
 class TestStoreEquivalence < Minitest::Test
   cover "DcbEventStore::PostgresStore*"
   cover "DcbEventStore::SqlStore*"
 
-  include DatabaseHelper
+  include PostgresDatabaseHelper
   include StoreContract
+  include SpecialCharactersContract
 
   def setup
     setup_db
@@ -18,10 +20,6 @@ class TestStoreEquivalence < Minitest::Test
 
   def teardown
     teardown_db
-  end
-
-  def build_store(upcaster: nil)
-    DcbEventStore::PostgresStore.new(@conn, upcaster: upcaster)
   end
 
   # Applies the same scripted operations to both stores and compares the

@@ -2,7 +2,7 @@ require_relative "../test_helper"
 
 # Behavioral unit tests for DecisionModel against InMemoryStore, so the
 # pure filtering/partitioning logic is mutation-tested without a live
-# database (integration coverage lives in test/integration/test_decision_model.rb).
+# database (end-to-end coverage lives in the shared DecisionModelContract).
 class TestDecisionModelUnit < Minitest::Test
   cover "DcbEventStore::DecisionModel*"
 

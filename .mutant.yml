@@ -20,9 +20,7 @@ requires:
   - ./test/unit/test_sql_builder
   - ./test/unit/test_sql_store
   - ./test/unit/test_lock_keys
-  - ./test/integration/test_store_append
-  - ./test/integration/test_store_read
-  - ./test/integration/test_read_from
+  - ./test/integration/test_append_only
   - ./test/integration/test_subscribe
   - ./test/integration/test_client
   - ./test/integration/test_decision_model

@@ -1,12 +1,12 @@
 require_relative "../test_helper"
-require_relative "../support/database"
+require_relative "../support/postgres_database"
 
 # Verifies PostgresStore::ArrayCodec round-trips through a real PostgreSQL text[] column:
 # values it encodes are parsed back unchanged after Postgres has normalized the
 # literal. Complements the pure encode/decode assertions in
 # test_postgres_array_codec.
 class TestPgArrayRoundtrip < Minitest::Test
-  include DatabaseHelper
+  include PostgresDatabaseHelper
 
   def setup
     setup_db

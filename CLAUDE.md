@@ -13,8 +13,9 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with a Post
 - `lib/dcb_event_store/sql_store/` - collaborators shared by SQL backends (`SqlBuilder`, `RowMapper`)
 - `lib/dcb_event_store/postgres_store/` - PG-only collaborators (`Dialect`, `ArrayCodec`, `LockKeys`)
 - `test/unit/` - unit tests
-- `test/integration/` - integration tests (require live PG)
+- `test/integration/` - integration tests (require live PG); backend-neutral cases live in the shared contracts, so these files keep only PG specifics (append-only triggers, LISTEN/NOTIFY subscribe, `text[]` round trip) plus the PG contract runners
 - `test/concurrency/` - concurrency tests
+- `test/support/` - shared test infra: `postgres_database.rb` (`PostgresDatabaseHelper`: connection, schema, `build_store`) and the backend contracts `store_contract.rb` (append/read/read_from/pagination/instrumentation), `special_characters_contract.rb`, `client_contract.rb`, `decision_model_contract.rb`, `upcaster_contract.rb`. Each contract is a module run against every backend: PG via `test/integration/`, InMemory via `test/unit/test_in_memory_store.rb`. Including classes set `@store` in setup and define `build_store(upcaster: nil)`
 - `examples/` - usage examples
 
 ## Database
@@ -36,7 +37,7 @@ bundle exec mutant run 'DcbEventStore::SqlStore#append'  # single method
 - `SqlStore` - abstract base for SQL backends: instrumentation, paginated read, append orchestration, subscribe loop; subclasses implement the hooks (`with_write_transaction`, `acquire_locks!`, `count_matching`, `insert_event`, `fetch_batch`, `notify_appended`, `listen`/`unlisten`/`wait_for_append`)
 - `PostgresStore` - low-level PG operations (advisory locks, single-statement conditional append, LISTEN/NOTIFY). Was named `Store`; `Store` is kept as an alias
 - `<Backend>Store::Dialect` - per-backend SQL details injected into `SqlBuilder`/`RowMapper` (placeholders, type/tag matching, insert casts, tag list encoding); `PostgresStore::Dialect` encodes lists through `PostgresStore::ArrayCodec` (was `PgArrayCodec`, kept as an alias)
-- `InMemoryStore` - single-threaded drop-in for `PostgresStore`, for fast tests without PG (shared contract: `test/support/store_contract.rb`)
+- `InMemoryStore` - single-threaded drop-in for `PostgresStore`, for fast tests without PG (runs the same shared contracts: `test/support/*_contract.rb`)
 - `Client` - high-level API (append, read, subscribe)
 - `Projection` / `DecisionModel` - higher-level abstractions
 - `Upcaster` - event schema migration on read

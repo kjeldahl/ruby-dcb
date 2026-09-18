@@ -1,5 +1,5 @@
 require_relative "../test_helper"
-require_relative "../support/database"
+require_relative "../support/postgres_database"
 
 class TestSubscribe < Minitest::Test
   cover "DcbEventStore::SqlStore#subscribe"
@@ -7,7 +7,7 @@ class TestSubscribe < Minitest::Test
   # live loop's resume position, which only PG subscribe tests can observe.
   cover "DcbEventStore::StoreInstrumentation*"
 
-  include DatabaseHelper
+  include PostgresDatabaseHelper
 
   def setup
     setup_db
@@ -21,7 +21,7 @@ class TestSubscribe < Minitest::Test
     received = []
 
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
+      conn = PostgresDatabaseHelper.connection
       store = DcbEventStore::PostgresStore.new(conn)
       store.subscribe(DcbEventStore::Query.all, after: 0) do |event|
         received << event
@@ -47,7 +47,7 @@ class TestSubscribe < Minitest::Test
     received = []
 
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
+      conn = PostgresDatabaseHelper.connection
       store = DcbEventStore::PostgresStore.new(conn)
       store.subscribe(DcbEventStore::Query.all) do |event|
         received << event
@@ -70,7 +70,7 @@ class TestSubscribe < Minitest::Test
     received = []
 
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
+      conn = PostgresDatabaseHelper.connection
       store = DcbEventStore::PostgresStore.new(conn)
       query = DcbEventStore::Query.new([
                                          DcbEventStore::QueryItem.new(event_types: ["Wanted"])
@@ -147,7 +147,7 @@ class TestSubscribe < Minitest::Test
   def run_subscriber(expected:, subscribe_instrumentation: :event)
     received = []
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
+      conn = PostgresDatabaseHelper.connection
       store = DcbEventStore::PostgresStore.new(conn, subscribe_instrumentation: subscribe_instrumentation)
       store.subscribe(DcbEventStore::Query.all, after: 0) do |event|
         received << event
@@ -170,7 +170,7 @@ class TestSubscribe < Minitest::Test
   end
 
   def test_subscribe_unlisten_on_block_raise
-    conn = DatabaseHelper.connection
+    conn = PostgresDatabaseHelper.connection
     store = DcbEventStore::PostgresStore.new(conn)
 
     # Need an event so catch-up yields and triggers the raise

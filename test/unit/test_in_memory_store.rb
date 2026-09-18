@@ -1,13 +1,21 @@
 require_relative "../test_helper"
 require_relative "../support/store_contract"
+require_relative "../support/special_characters_contract"
+require_relative "../support/client_contract"
+require_relative "../support/decision_model_contract"
+require_relative "../support/upcaster_contract"
 
-# Runs the shared store contract against InMemoryStore, proving it behaves
-# like PostgresStore (which runs the same contract in
-# test/integration/test_store_equivalence.rb) — no database required.
+# Runs the shared backend contracts against InMemoryStore, proving it behaves
+# like PostgresStore (which runs the same contracts in
+# test/integration/) — no database required.
 class TestInMemoryStore < Minitest::Test
   cover "DcbEventStore::InMemoryStore*"
 
   include StoreContract
+  include SpecialCharactersContract
+  include ClientContract
+  include DecisionModelContract
+  include UpcasterContract
 
   def setup
     @store = build_store
@@ -93,37 +101,5 @@ class TestInMemoryStore < Minitest::Test
 
     assert_equal %w[A B], received.map(&:type)
     assert_equal received.map(&:sequence_position).uniq, received.map(&:sequence_position)
-  end
-
-  def test_works_with_client
-    client = DcbEventStore::Client.new(@store)
-    client.append(DcbEventStore::Event.new(type: "A", data: {x: 1}))
-
-    events = client.read(DcbEventStore::Query.all).to_a
-    assert_equal 1, events.size
-    assert_equal client.correlation_id, events[0].correlation_id
-  end
-
-  def test_works_with_decision_model
-    @store.append([DcbEventStore::Event.new(type: "Counted", tags: ["c:1"])])
-    @store.append([DcbEventStore::Event.new(type: "Counted", tags: ["c:1"])])
-
-    projection = DcbEventStore::Projection.new(
-      initial_state: 0,
-      handlers: {"Counted" => ->(state, _event) { state + 1 }},
-      query: DcbEventStore::Query.new([
-                                        DcbEventStore::QueryItem.new(event_types: ["Counted"], tags: ["c:1"])
-                                      ])
-    )
-
-    result = DcbEventStore::DecisionModel.build(@store, count: projection)
-    assert_equal 2, result.states[:count]
-
-    # The returned condition guards the boundary: once a conflicting event
-    # sneaks in, appending with the condition fails.
-    @store.append([DcbEventStore::Event.new(type: "Counted", tags: ["c:1"])])
-    assert_raises(DcbEventStore::ConditionNotMet) do
-      @store.append([DcbEventStore::Event.new(type: "Counted", tags: ["c:1"])], result.append_condition)
-    end
   end
 end
