@@ -38,3 +38,9 @@ module DcbEventStore
 
   self.instrumentation = Notifications.new
 end
+
+# Rails integration: loaded only inside a Rails process (Bundler.require
+# happens after config/application.rb has required rails), and the only
+# place the gem touches Rails at all. It wires the instrumentation up so a
+# Rails application logs store operations without an initializer of its own.
+require_relative "dcb_event_store/railtie" if defined?(Rails::Railtie)
