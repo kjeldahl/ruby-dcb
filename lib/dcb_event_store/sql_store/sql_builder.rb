@@ -3,13 +3,17 @@ module DcbEventStore
     # Builds the SQL strings and bind-parameter arrays a SqlStore executes.
     # Pure: every method is a function of its arguments (a Query, an
     # AppendCondition's parts, or the events to insert) and the injected
-    # PgArrayCodec. No connection, no I/O — fast to unit and mutation test.
+    # dialect. No connection, no I/O — fast to unit and mutation test.
+    #
+    # The statement shapes (SELECT, COUNT, VALUES rows) live here; everything
+    # backend-specific about them — placeholder syntax, matching operators,
+    # column casts, list encoding — comes from the dialect.
     #
     # Each builder returns a [sql, params] pair (or a values clause / params
-    # pair) ready to hand to PG#exec_params.
+    # pair) ready to hand to the driver.
     class SqlBuilder
-      def initialize(codec)
-        @codec = codec
+      def initialize(dialect)
+        @dialect = dialect
       end
 
       # SELECT for reading the event stream matching +query+, optionally only
@@ -32,21 +36,13 @@ module DcbEventStore
 
       # The "(VALUES ...)" row fragments and their bind parameters for inserting
       # +events+. +param_offset+ is the number of bind parameters already
-      # consumed by a preceding clause, so the placeholders continue from there.
+      # consumed by a preceding clause, so the placeholders continue from there:
+      # the dialect numbers them off the array it appends to, which starts out
+      # padded to the offset and is unpadded again on the way out.
       def values_clause(events, param_offset)
-        value_rows = []
-        insert_params = []
-        events.each do |event|
-          offset = param_offset + insert_params.size
-          value_rows << "($#{offset + 1}::uuid, $#{offset + 2}::text, $#{offset + 3}::jsonb, " \
-                        "$#{offset + 4}::text[], $#{offset + 5}::uuid, $#{offset + 6}::uuid, $#{offset + 7}::integer)"
-          insert_params.push(
-            event.id, event.type, JSON.generate(event.data),
-            @codec.encode(event.tags),
-            event.causation_id, event.correlation_id, 1
-          )
-        end
-        [value_rows, insert_params]
+        params = Array.new(param_offset)
+        value_rows = events.map { |event| @dialect.insert_row(params, event) }
+        [value_rows, params.drop(param_offset)]
       end
 
       private
@@ -57,31 +53,22 @@ module DcbEventStore
         params = []
         clauses = query.items.filter_map { |item| item_clause(item, params) }
         where = clauses.join(" OR ")
-
-        if after
-          params << after
-          where = "(#{where}) AND sequence_position > $#{params.size}"
-        end
+        where = "(#{where}) AND #{@dialect.after_clause(params, after)}" if after
 
         [where, params]
       end
 
       def match_all_where(after)
-        return ["sequence_position > $1", [after]] if after
+        return [nil, []] unless after
 
-        [nil, []]
+        params = []
+        [@dialect.after_clause(params, after), params]
       end
 
       def item_clause(item, params)
         parts = []
-        unless item.event_types.empty?
-          params << @codec.encode(item.event_types)
-          parts << "type = ANY($#{params.size}::text[])"
-        end
-        unless item.tags.empty?
-          params << @codec.encode(item.tags)
-          parts << "tags @> $#{params.size}::text[]"
-        end
+        parts << @dialect.type_in(params, item.event_types) unless item.event_types.empty?
+        parts << @dialect.tags_contain(params, item.tags) unless item.tags.empty?
         return if parts.empty?
 
         "(#{parts.join(' AND ')})"

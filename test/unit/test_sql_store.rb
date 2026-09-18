@@ -11,15 +11,15 @@ require "time"
 class TestSqlStore < Minitest::Test
   cover "DcbEventStore::SqlStore*"
 
-  # Tag codec for the fake rows. The real backends encode tags in their own
-  # dialect (PgArrayCodec for PostgreSQL), which SqlStore knows nothing about,
-  # so the fake stores them as JSON.
-  module JsonTagCodec
-    def self.encode(tags)
+  # Dialect for the fake rows: the RowMapper only needs the tag list decoder.
+  # The real backends encode tags in their own dialect (a PG array literal for
+  # PostgreSQL), which SqlStore knows nothing about, so the fake uses JSON.
+  module JsonDialect
+    def self.encode_list(tags)
       JSON.generate(tags)
     end
 
-    def self.parse(text)
+    def self.decode_list(text)
       JSON.parse(text)
     end
   end
@@ -30,7 +30,7 @@ class TestSqlStore < Minitest::Test
 
     def initialize(**)
       super
-      @row_mapper = DcbEventStore::SqlStore::RowMapper.new(JsonTagCodec, @upcaster)
+      @row_mapper = DcbEventStore::SqlStore::RowMapper.new(JsonDialect, @upcaster)
       @rows = []
       @notified = []
       @lock_conditions = []
@@ -58,7 +58,7 @@ class TestSqlStore < Minitest::Test
         "sequence_position" => (@rows.size + 1).to_s,
         "type" => event.type,
         "data" => JSON.generate(event.data),
-        "tags" => JsonTagCodec.encode(event.tags),
+        "tags" => JsonDialect.encode_list(event.tags),
         "created_at" => Time.now.utc.iso8601(6),
         "event_id" => event.id,
         "causation_id" => event.causation_id,

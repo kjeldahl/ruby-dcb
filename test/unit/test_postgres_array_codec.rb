@@ -1,11 +1,11 @@
 require_relative "../test_helper"
 require "pg"
 
-class TestPgArrayCodec < Minitest::Test
-  cover "DcbEventStore::PgArrayCodec*"
+class TestPostgresArrayCodec < Minitest::Test
+  cover "DcbEventStore::PostgresStore::ArrayCodec*"
 
   def setup
-    @codec = DcbEventStore::PgArrayCodec.new
+    @codec = DcbEventStore::PostgresStore::ArrayCodec.new
   end
 
   # --- parse ---

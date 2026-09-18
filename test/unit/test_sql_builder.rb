@@ -1,11 +1,14 @@
 require_relative "../test_helper"
 require "pg"
 
+# Built with the PostgreSQL dialect, so the expected SQL below is the SQL the
+# PG store has always sent: these assertions are what keeps the dialect
+# extraction byte-for-byte faithful.
 class TestSqlBuilder < Minitest::Test
   cover "DcbEventStore::SqlStore::SqlBuilder*"
 
   def setup
-    @builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PgArrayCodec.new)
+    @builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PostgresStore::Dialect.new)
   end
 
   def query(items)
@@ -115,10 +118,13 @@ class TestSqlBuilder < Minitest::Test
 
   def test_values_clause_respects_param_offset
     event = DcbEventStore::Event.new(type: "A", id: "id-1")
-    rows, = @builder.values_clause([event], 2)
+    rows, params = @builder.values_clause([event], 2)
     assert_equal [
       "($3::uuid, $4::text, $5::jsonb, $6::text[], $7::uuid, $8::uuid, $9::integer)"
     ], rows
+    # Only the event's own parameters come back: the caller already holds the
+    # two the offset stands for.
+    assert_equal ["id-1", "A", "{}", "{}", nil, nil, 1], params
   end
 
   def test_values_clause_multiple_events_increment_placeholders

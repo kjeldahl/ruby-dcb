@@ -6,4 +6,8 @@ module DcbEventStore
   # The nested constants resolve too: Store::LockKeys through PostgresStore,
   # Store::SqlBuilder and Store::RowMapper through its SqlStore ancestor.
   Store = PostgresStore
+
+  # The PG array codec likewise moved under PostgresStore when the dialects
+  # were split out; the old top-level name stays as an alias.
+  PgArrayCodec = PostgresStore::ArrayCodec
 end

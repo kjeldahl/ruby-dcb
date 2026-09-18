@@ -1,6 +1,3 @@
-require "json"
-require "time"
-
 module DcbEventStore
   # PostgreSQL-backed store: the SqlStore hooks implemented against a live
   # PG connection.
@@ -12,9 +9,9 @@ module DcbEventStore
     def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
       super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
       @conn = conn
-      @codec = PgArrayCodec.new
-      @sql = SqlBuilder.new(@codec)
-      @row_mapper = RowMapper.new(@codec, @upcaster)
+      @dialect = Dialect.new
+      @sql = SqlBuilder.new(@dialect)
+      @row_mapper = RowMapper.new(@dialect, @upcaster)
     end
 
     private
@@ -71,16 +68,7 @@ module DcbEventStore
     end
 
     def insert_event(event)
-      result = @conn.exec_params(
-        <<~SQL,
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
-          VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
-          ON CONFLICT (event_id) DO NOTHING
-          RETURNING sequence_position, created_at
-        SQL
-        [event.id, event.type, JSON.generate(event.data), @codec.encode(event.tags),
-         event.causation_id, event.correlation_id, 1]
-      )
+      result = @conn.exec_params(@dialect.insert_sql, @dialect.insert_params(event))
       return nil if result.ntuples.zero?
 
       result[0]
