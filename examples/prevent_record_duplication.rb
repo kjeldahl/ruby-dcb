@@ -7,9 +7,10 @@
 # client-generated token; the decision model rejects re-submissions.
 #
 # Usage: ruby examples/prevent_record_duplication.rb
+#        DCB_BACKEND=sqlite ruby examples/prevent_record_duplication.rb   # or postgres (default), memory
 
 require_relative "../lib/dcb_event_store"
-require "pg"
+require_relative "support/backend"
 require "securerandom"
 
 module PreventRecordDuplication
@@ -52,13 +53,11 @@ module PreventRecordDuplication
   # -- Demo ------------------------------------------------------------------
 
   def self.run
-    conn = PG.connect(dbname: "dcb_event_store_test")
-    conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::PostgresStore::Schema.create!(conn)
-    conn.exec("TRUNCATE events RESTART IDENTITY")
-    store = DcbEventStore::PostgresStore.new(conn)
-    client = DcbEventStore::Client.new(store)
+    Examples::Backend.with_store { |store| demo(DcbEventStore::Client.new(store)) }
+  end
 
+  # The example itself, on whichever backend DCB_BACKEND selected.
+  def self.demo(client)
     puts "=== Prevent Record Duplication (DCB Example) ==="
     puts
 
@@ -94,8 +93,6 @@ module PreventRecordDuplication
 
     puts
     puts "Done. #{client.read(DcbEventStore::Query.all).count} events total."
-  ensure
-    conn&.close
   end
 end
 

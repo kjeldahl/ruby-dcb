@@ -8,9 +8,10 @@
 # prevents concurrent duplicate assignment.
 #
 # Usage: ruby examples/invoice_number.rb
+#        DCB_BACKEND=sqlite ruby examples/invoice_number.rb   # or postgres (default), memory
 
 require_relative "../lib/dcb_event_store"
-require "pg"
+require_relative "support/backend"
 
 module InvoiceNumber
   # -- Projections -----------------------------------------------------------
@@ -51,13 +52,11 @@ module InvoiceNumber
   # -- Demo ------------------------------------------------------------------
 
   def self.run
-    conn = PG.connect(dbname: "dcb_event_store_test")
-    conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::PostgresStore::Schema.create!(conn)
-    conn.exec("TRUNCATE events RESTART IDENTITY")
-    store = DcbEventStore::PostgresStore.new(conn)
-    client = DcbEventStore::Client.new(store)
+    Examples::Backend.with_store { |store| demo(DcbEventStore::Client.new(store)) }
+  end
 
+  # The example itself, on whichever backend DCB_BACKEND selected.
+  def self.demo(client)
     puts "=== Invoice Number (DCB Example) ==="
     puts
 
@@ -105,8 +104,6 @@ module InvoiceNumber
 
     puts
     puts "Done. #{client.read(DcbEventStore::Query.all).count} invoices total."
-  ensure
-    conn&.close
   end
 end
 

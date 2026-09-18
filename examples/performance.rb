@@ -3,18 +3,23 @@
 
 # Performance benchmark using the course subscription model.
 #
-# Seeds a large dataset via COPY, then benchmarks DCB operations:
-#   - Query selectivity (how well GIN tags filter)
+# Seeds a large dataset in bulk (PostgreSQL: COPY, SQLite: prepared INSERTs in
+# batched IMMEDIATE transactions), then benchmarks DCB operations:
+#   - Query selectivity (how well the tag index filters)
 #   - DecisionModel.build for subscribe_student (5 projections)
 #   - Append with condition check under load
 #   - Concurrent appends with contention
 #
+# Both SQL backends run the same measurements, so their numbers are directly
+# comparable; DCB_BACKEND=memory is rejected (see #run).
+#
 # Usage:
 #   ruby examples/performance.rb              # default: 100k students, 500 courses
 #   ruby examples/performance.rb 1_000_000 2000  # custom: 1M students, 2k courses
+#   DCB_BACKEND=sqlite ruby examples/performance.rb 20000 100
 
 require_relative "../lib/dcb_event_store"
-require "pg"
+require_relative "support/backend"
 require "securerandom"
 
 module Performance
@@ -107,9 +112,12 @@ module Performance
     )
   end
 
-  # -- Seeding via COPY ------------------------------------------------------
+  # -- Seeding ---------------------------------------------------------------
 
-  def self.seed!(conn, num_students, num_courses)
+  # Same dataset on either backend: `num_courses` CourseDefined events and
+  # `num_students * subs_per_student` StudentSubscribedToCourse events, every
+  # subscription tagged with both its student and its course.
+  def self.seed!(session, num_students, num_courses)
     subs_per_student = [MAX_STUDENT_COURSES, num_courses].min
     capacity = (num_students * subs_per_student / num_courses.to_f * 1.5).ceil
 
@@ -117,6 +125,19 @@ module Performance
          "#{subs_per_student} subs/student, capacity=#{capacity}/course"
     puts
 
+    total = case session.name
+            when "sqlite" then seed_sqlite!(session.connection, num_students, num_courses, subs_per_student, capacity)
+            else seed_postgres!(session.connection, num_students, num_courses, subs_per_student, capacity)
+            end
+
+    puts
+    puts "Total: #{total} events seeded"
+    total
+  end
+
+  # The COPY protocol, with the append-only trigger dropped for the load and
+  # recreated afterwards.
+  def self.seed_postgres!(conn, num_students, num_courses, subs_per_student, capacity)
     # Disable triggers and indexes for fast bulk load
     conn.exec("DROP TRIGGER IF EXISTS enforce_append_only ON events")
     conn.exec("TRUNCATE events RESTART IDENTITY")
@@ -169,8 +190,78 @@ module Performance
     _, t = measure { conn.exec("ANALYZE events") }
     puts "(#{t.round(2)}s)"
 
-    puts
-    puts "Total: #{total} events seeded"
+    total
+  end
+
+  # SQLite has no COPY: prepared INSERTs, committed every SEED_BATCH events so
+  # one IMMEDIATE transaction never grows unbounded. The append-only triggers
+  # only fire on UPDATE/DELETE, so the load needs no trigger juggling -- but
+  # the rows cannot be deleted either, so the database is dropped and recreated
+  # instead of truncated. Every event also writes its event_tags index rows,
+  # exactly as SqliteStore#append would.
+  SEED_BATCH = 5_000
+
+  def self.seed_sqlite!(db, num_students, num_courses, subs_per_student, capacity)
+    DcbEventStore::SqliteStore::Schema.drop!(db)
+    DcbEventStore::SqliteStore::Schema.create!(db)
+
+    insert_event = db.prepare(
+      "INSERT INTO events (event_id, type, data, tags, schema_version) VALUES (?, ?, ?, ?, 1)"
+    )
+    insert_tag = db.prepare("INSERT INTO event_tags (tag, sequence_position) VALUES (?, ?)")
+    written = 0
+    commit_every = lambda do
+      written += 1
+      return unless (written % SEED_BATCH).zero?
+
+      db.execute("COMMIT")
+      db.execute("BEGIN IMMEDIATE")
+    end
+
+    total = 0
+    db.execute("BEGIN IMMEDIATE")
+
+    print "  Courses... "
+    _, t = measure do
+      num_courses.times do |i|
+        cid = "course-#{i}"
+        insert_event.execute(SecureRandom.uuid, "CourseDefined",
+                             %({"course_id":"#{cid}","capacity":#{capacity}}), %(["course:#{cid}"]))
+        insert_tag.execute("course:#{cid}", db.last_insert_row_id)
+        commit_every.call
+      end
+    end
+    total += num_courses
+    puts "#{num_courses} events (#{t.round(2)}s)"
+
+    num_subs = num_students * subs_per_student
+    print "  Subscriptions... "
+    _, t = measure do
+      num_students.times do |si|
+        sid = "student-#{si}"
+        (0...num_courses).to_a.sample(subs_per_student).each do |ci|
+          cid = "course-#{ci}"
+          insert_event.execute(SecureRandom.uuid, "StudentSubscribedToCourse",
+                               %({"student_id":"#{sid}","course_id":"#{cid}"}),
+                               %(["student:#{sid}","course:#{cid}"]))
+          position = db.last_insert_row_id
+          insert_tag.execute("student:#{sid}", position)
+          insert_tag.execute("course:#{cid}", position)
+          commit_every.call
+        end
+      end
+    end
+    total += num_subs
+    puts "#{num_subs} events (#{t.round(2)}s)"
+
+    db.execute("COMMIT")
+    insert_event.close
+    insert_tag.close
+
+    print "  ANALYZE... "
+    _, t = measure { db.execute("ANALYZE") }
+    puts "(#{t.round(2)}s)"
+
     total
   end
 
@@ -211,8 +302,12 @@ module Performance
     results
   end
 
-  def self.run_benchmarks(conn, store, num_students, num_courses)
+  def self.run_benchmarks(session, num_students, num_courses)
+    store = session.store
     client = DcbEventStore::Client.new(store)
+    # The tag lookup is a GIN index on PostgreSQL and the event_tags table on
+    # SQLite; the labels say which one the numbers belong to.
+    tag_index = session.name == "sqlite" ? "event_tags" : "GIN"
     n = 50 # iterations per benchmark
     bench_start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
@@ -225,14 +320,14 @@ module Performance
     puts
     puts "--- Read: Query selectivity ---"
 
-    bench("read single course (GIN tags)", iterations: n) do
+    bench("read single course (#{tag_index} tags)", iterations: n) do
       q = DcbEventStore::Query.new([
         DcbEventStore::QueryItem.new(event_types: %w[CourseDefined CourseCapacityChanged StudentSubscribedToCourse], tags: ["course:course-0"])
       ])
       store.read(q).count
     end
 
-    bench("read single student (GIN tags)", iterations: n) do
+    bench("read single student (#{tag_index} tags)", iterations: n) do
       q = DcbEventStore::Query.new([
         DcbEventStore::QueryItem.new(event_types: ["StudentSubscribedToCourse"], tags: ["student:student-0"])
       ])
@@ -317,9 +412,7 @@ module Performance
     _, elapsed = measure do
       workers = threads.times.map do |ti|
         Thread.new do
-          c = PG.connect(dbname: "dcb_event_store_test")
-          c.exec("SET client_min_messages TO warning")
-          s = DcbEventStore::PostgresStore.new(c)
+          s, closer = session.connect
           cl = DcbEventStore::Client.new(s)
           ops_per_thread.times do |oi|
             sid = "perf-#{base + ti * 1000 + oi}"
@@ -331,7 +424,7 @@ module Performance
             end
           end
         ensure
-          c&.close
+          closer&.call
         end
       end
       workers.each(&:join)
@@ -348,6 +441,10 @@ module Performance
 
     # -- 6. Concurrent append throughput (processes) --
     puts
+    # Each worker opens its own connection; the parent's handle is inherited
+    # and closed unused in the child, which the sqlite3 gem warns about on
+    # every fork.
+    SQLite3::ForkSafety.suppress_warnings! if defined?(SQLite3::ForkSafety)
     num_procs = 10
     puts "--- Concurrent: #{num_procs} processes, scaling ops/proc ---"
 
@@ -362,9 +459,7 @@ module Performance
               r.close if i != pi
             end
             _, w = pipes[pi]
-            c = PG.connect(dbname: "dcb_event_store_test")
-            c.exec("SET client_min_messages TO warning")
-            s = DcbEventStore::PostgresStore.new(c)
+            s, closer = session.connect
             cl = DcbEventStore::Client.new(s)
             ok = 0
             fail_count = 0
@@ -380,7 +475,7 @@ module Performance
             end
             w.write("#{ok},#{fail_count}")
             w.close
-            c&.close
+            closer&.call
           ensure
             exit!(0)
           end
@@ -412,6 +507,10 @@ module Performance
     # -- 7. Table stats --
     puts
     puts "--- Table stats ---"
+    session.name == "sqlite" ? sqlite_stats(session.connection) : postgres_stats(session.connection)
+  end
+
+  def self.postgres_stats(conn)
     result = conn.exec("SELECT count(*) as cnt, pg_size_pretty(pg_total_relation_size('events')) as size FROM events")
     row = result[0]
     puts "  Events: #{row["cnt"]}, Table size (incl. indexes): #{row["size"]}"
@@ -425,30 +524,41 @@ module Performance
     end
   end
 
+  # SQLite reports no per-table sizes, so this is the whole database file: the
+  # events table, the event_tags index table and the indexes on both.
+  def self.sqlite_stats(db)
+    events = db.get_first_value("SELECT count(*) FROM events")
+    tags = db.get_first_value("SELECT count(*) FROM event_tags")
+    bytes = db.get_first_value("PRAGMA page_count").to_i * db.get_first_value("PRAGMA page_size").to_i
+    puts "  Events: #{events}, event_tags rows: #{tags}"
+    puts "  Database size (incl. indexes): #{(bytes / 1024.0 / 1024).round(1)} MB"
+  end
+
   # -- Main ------------------------------------------------------------------
 
   def self.run
     num_students = (ARGV[0] || 100_000).to_i
     num_courses  = (ARGV[1] || 500).to_i
 
-    conn = PG.connect(dbname: "dcb_event_store_test")
-    conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::PostgresStore::Schema.create!(conn)
+    if Examples::Backend.selected == "memory"
+      warn "performance.rb needs a SQL backend: InMemoryStore scans the whole log per read " \
+           "and cannot be shared across threads or processes.\n" \
+           "Run it with DCB_BACKEND=postgres (default) or DCB_BACKEND=sqlite."
+      return
+    end
 
-    puts "=" * 70
-    puts "DCB Performance Benchmark"
-    puts "=" * 70
-    puts
+    Examples::Backend.with_session do |session|
+      puts "=" * 70
+      puts "DCB Performance Benchmark (#{session.name})"
+      puts "=" * 70
+      puts
 
-    seed!(conn, num_students, num_courses)
+      seed!(session, num_students, num_courses)
+      run_benchmarks(session, num_students, num_courses)
 
-    store = DcbEventStore::PostgresStore.new(conn)
-    run_benchmarks(conn, store, num_students, num_courses)
-
-    puts
-    puts "Done."
-  ensure
-    conn&.close
+      puts
+      puts "Done."
+    end
   end
 end
 
