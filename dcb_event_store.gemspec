@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name        = "dcb_event_store"
-  s.version     = "0.1.0"
+  s.version     = "0.2.0"
   s.summary     = "DCB-compliant event store backed by PostgreSQL or SQLite"
   s.authors     = ["Jacob"]
   s.files       = Dir["lib/**/*.rb"]
