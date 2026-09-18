@@ -1,0 +1,121 @@
+require_relative "sql_store"
+
+module DcbEventStore
+  # PostgreSQL-backed store: the SqlStore hooks implemented against a live
+  # PG connection.
+  #
+  # Appends serialize on per-tag advisory locks (see LockKeys) so appends
+  # touching disjoint tags still run in parallel, and subscribers are woken
+  # through LISTEN/NOTIFY rather than polling.
+  class PostgresStore < SqlStore
+    def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
+      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
+      @conn = conn
+      @dialect = Dialect.new
+      @sql = SqlBuilder.new(@dialect)
+      @row_mapper = RowMapper.new(@dialect, @upcaster)
+    end
+
+    private
+
+    def fetch_batch(query, after:, limit:)
+      sql, params = @sql.read_sql(query, after: after)
+      @conn.exec_params("#{sql} LIMIT #{limit}", params).to_a
+    end
+
+    def acquire_locks!(condition)
+      keys = LockKeys.for(condition)
+      pg_arr = "{#{keys.join(',')}}"
+      @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [pg_arr])
+    end
+
+    def count_matching(query, after)
+      sql, params = @sql.condition_sql(query, after)
+      @conn.exec_params(sql, params)[0]["count"].to_i
+    end
+
+    # PostgreSQL does the conditional append in a single statement: the CTE
+    # evaluates the condition and the INSERT ... SELECT only writes rows when
+    # the CTE found no conflict, so one round trip covers check and insert.
+    # An empty RETURNING means either a conflict or that every event was a
+    # duplicate id, which the follow-up count tells apart.
+    def append_with_condition(events, condition)
+      cond_sql, cond_params = @sql.condition_sql(condition.fail_if_events_match, condition.after)
+      value_rows, insert_params = @sql.values_clause(events, cond_params.size)
+
+      result = @conn.exec_params(
+        <<~SQL,
+          WITH cond AS (#{cond_sql})
+          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          SELECT v.* FROM (VALUES #{value_rows.join(', ')})
+            AS v(event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
+          ON CONFLICT (event_id) DO NOTHING
+          RETURNING event_id, sequence_position, created_at
+        SQL
+        cond_params + insert_params
+      )
+
+      if result.ntuples.zero? && events.any?
+        matching = count_matching(condition.fail_if_events_match, condition.after)
+        raise ConditionNotMet, "conflicting event(s)" if matching.positive?
+
+        return []
+      end
+
+      events_by_id = events.to_h { |e| [e.id, e] }
+      result.map do |row|
+        @row_mapper.to_appended_event(events_by_id[row["event_id"]], row)
+      end
+    end
+
+    def insert_event(event)
+      result = @conn.exec_params(@dialect.insert_sql, @dialect.insert_params(event))
+      return nil if result.ntuples.zero?
+
+      result[0]
+    end
+
+    def notify_appended(position)
+      @conn.exec("NOTIFY events_appended, '#{position}'")
+    end
+
+    def listen
+      @conn.exec("LISTEN events_appended")
+    end
+
+    # Called from subscribe's ensure block, where the connection may already
+    # be gone (closed socket, failed subscription), so failures are ignored.
+    def unlisten
+      @conn.exec("UNLISTEN events_appended")
+    rescue StandardError
+      nil
+    end
+
+    def wait_for_append
+      @conn.wait_for_notify
+    end
+
+    def with_write_transaction
+      @conn.exec("BEGIN")
+      result = yield
+      @conn.exec("COMMIT")
+      result
+    rescue StandardError
+      begin
+        @conn.exec("ROLLBACK")
+      rescue StandardError
+        nil
+      end
+      raise
+    end
+  end
+end
+
+# Loaded after the class body on purpose: each file below reopens
+# `class PostgresStore`, which would raise a superclass mismatch if it ran
+# before the `< SqlStore` definition above.
+require_relative "postgres_store/array_codec"
+require_relative "postgres_store/dialect"
+require_relative "postgres_store/lock_keys"
+require_relative "postgres_store/schema"

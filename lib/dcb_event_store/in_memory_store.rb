@@ -1,12 +1,12 @@
 require "json"
 
 module DcbEventStore
-  # In-memory drop-in replacement for Store, intended for fast tests
+  # In-memory drop-in replacement for PostgresStore, intended for fast tests
   # (e.g. mutation testing) where a live PostgreSQL server is too slow.
   #
   # Not thread-safe: it is meant for single-threaded test runs only.
-  # Unlike the PostgreSQL-backed Store, #subscribe does not block waiting
-  # for notifications; it catches up on existing events and then delivers
+  # Unlike PostgresStore, #subscribe does not block waiting for
+  # notifications; it catches up on existing events and then delivers
   # matching events synchronously as they are appended.
   class InMemoryStore
     include StoreInstrumentation

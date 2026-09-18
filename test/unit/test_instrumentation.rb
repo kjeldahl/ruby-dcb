@@ -345,7 +345,7 @@ class TestSubscribeInstrumentation < InstrumentationTestCase
     assert_equal "subscribe_instrumentation must be one of [:event, :batch], got :nope", error.message
 
     assert_raises(ArgumentError) do
-      DcbEventStore::Store.new(nil, subscribe_instrumentation: :nope)
+      DcbEventStore::PostgresStore.new(nil, subscribe_instrumentation: :nope)
     end
   end
 end

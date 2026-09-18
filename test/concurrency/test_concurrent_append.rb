@@ -1,9 +1,9 @@
 require_relative "../test_helper"
-require_relative "../support/database"
+require_relative "../support/postgres_database"
 require "concurrent"
 
 class TestConcurrentAppend < Minitest::Test
-  include DatabaseHelper
+  include PostgresDatabaseHelper
 
   def setup
     setup_db
@@ -20,8 +20,8 @@ class TestConcurrentAppend < Minitest::Test
 
     threads = n.times.map do |i|
       Thread.new do
-        conn = DatabaseHelper.connection
-        store = DcbEventStore::Store.new(conn)
+        conn = PostgresDatabaseHelper.connection
+        store = DcbEventStore::PostgresStore.new(conn)
 
         query = DcbEventStore::Query.new([
                                            DcbEventStore::QueryItem.new(event_types: ["SeatReserved"],
@@ -61,8 +61,8 @@ class TestConcurrentAppend < Minitest::Test
 
     threads = n.times.map do |i|
       Thread.new do
-        conn = DatabaseHelper.connection
-        store = DcbEventStore::Store.new(conn)
+        conn = PostgresDatabaseHelper.connection
+        store = DcbEventStore::PostgresStore.new(conn)
 
         query = DcbEventStore::Query.new([
                                            DcbEventStore::QueryItem.new(event_types: ["Reserved"],
@@ -101,8 +101,8 @@ class TestConcurrentAppend < Minitest::Test
 
     threads = 2.times.map do |i|
       Thread.new do
-        conn = DatabaseHelper.connection
-        store = DcbEventStore::Store.new(conn)
+        conn = PostgresDatabaseHelper.connection
+        store = DcbEventStore::PostgresStore.new(conn)
 
         barrier.wait
 
@@ -146,8 +146,8 @@ class TestConcurrentAppend < Minitest::Test
 
     threads = n.times.map do |_i|
       Thread.new do
-        conn = DatabaseHelper.connection
-        store = DcbEventStore::Store.new(conn)
+        conn = PostgresDatabaseHelper.connection
+        store = DcbEventStore::PostgresStore.new(conn)
 
         query = DcbEventStore::Query.new([
                                            DcbEventStore::QueryItem.new(event_types: ["Race"], tags: ["shared:1"])
@@ -200,9 +200,9 @@ class TestConcurrentAppend < Minitest::Test
 
     threads = n.times.map do |i|
       Thread.new do
-        conn = DatabaseHelper.connection
+        conn = PostgresDatabaseHelper.connection
         conn.exec("SET client_min_messages TO warning")
-        store = DcbEventStore::Store.new(conn)
+        store = DcbEventStore::PostgresStore.new(conn)
 
         # Build decision model: check student subscription count + course existence
         student_subs = DcbEventStore::Projection.new(
@@ -273,9 +273,9 @@ class TestConcurrentAppend < Minitest::Test
 
     threads = n.times.map do |i|
       Thread.new do
-        conn = DatabaseHelper.connection
+        conn = PostgresDatabaseHelper.connection
         conn.exec("SET client_min_messages TO warning")
-        store = DcbEventStore::Store.new(conn)
+        store = DcbEventStore::PostgresStore.new(conn)
 
         query = DcbEventStore::Query.new([
                                            DcbEventStore::QueryItem.new(event_types: ["IndyEvent"],

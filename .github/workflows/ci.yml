@@ -39,6 +39,15 @@ jobs:
           bundler-cache: true
       - name: Verify gem loads
         run: ruby -e "require './lib/dcb_event_store'; puts DcbEventStore::VERSION"
+      # The SQLite backend and the unit tier must not need a server. Run them
+      # with the PG environment cleared, before the full suite: a test that
+      # reached for PostgreSQL here would fail instead of quietly passing.
+      - name: Run SQLite and unit tests without PostgreSQL
+        env:
+          PGHOST: ""
+          PGUSER: ""
+          PGPASSWORD: ""
+        run: bundle exec ruby -Itest -e 'Dir["test/{unit,sqlite}/**/test_*.rb"].each { |f| require File.expand_path(f) }'
       - name: Run tests
         run: bundle exec rake
       - name: Upload coverage report

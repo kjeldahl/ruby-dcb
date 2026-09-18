@@ -2,14 +2,14 @@ require_relative "../test_helper"
 require "pg"
 
 class TestRowMapper < Minitest::Test
-  cover "DcbEventStore::Store::RowMapper*"
+  cover "DcbEventStore::SqlStore::RowMapper*"
 
   def setup
-    @codec = DcbEventStore::PgArrayCodec.new
+    @dialect = DcbEventStore::PostgresStore::Dialect.new
   end
 
   def mapper(upcaster: nil)
-    DcbEventStore::Store::RowMapper.new(@codec, upcaster)
+    DcbEventStore::SqlStore::RowMapper.new(@dialect, upcaster)
   end
 
   def row(overrides = {})
@@ -40,6 +40,19 @@ class TestRowMapper < Minitest::Test
     assert_equal "cause-1", event.causation_id
     assert_equal "corr-1", event.correlation_id
     assert_equal 3, event.schema_version
+  end
+
+  # PostgreSQL hands every column back as text; other drivers return typed
+  # cells, which the mapper must take as they are.
+  def test_to_sequenced_event_accepts_typed_cells
+    time = Time.utc(2026, 6, 13, 22, 0, 0)
+    event = mapper.to_sequenced_event(
+      row("sequence_position" => 42, "schema_version" => 3, "created_at" => time)
+    )
+
+    assert_equal 42, event.sequence_position
+    assert_equal 3, event.schema_version
+    assert_same time, event.created_at
   end
 
   def test_to_sequenced_event_parses_json_with_symbol_keys
@@ -75,5 +88,14 @@ class TestRowMapper < Minitest::Test
     assert_equal "c-1", appended.causation_id
     assert_equal "r-1", appended.correlation_id
     assert_equal 1, appended.schema_version
+  end
+
+  def test_to_appended_event_accepts_typed_cells
+    time = Time.utc(2026, 6, 13, 22, 0, 0)
+    src = DcbEventStore::Event.new(type: "A", id: "id-1")
+    appended = mapper.to_appended_event(src, row("sequence_position" => 7, "created_at" => time))
+
+    assert_equal 7, appended.sequence_position
+    assert_same time, appended.created_at
   end
 end

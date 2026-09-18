@@ -1,11 +1,16 @@
 require "securerandom"
 
-# Shared behavioral contract for DcbEventStore stores.
+# Shared behavioral contract for DcbEventStore stores: append, read,
+# read_from, pagination and instrumentation.
 #
-# Every store implementation (PostgreSQL-backed Store, InMemoryStore) must
+# Every store implementation (PostgresStore, InMemoryStore) must
 # pass these tests with identical observable behavior. Including classes
 # must set @store in setup and define #build_store(upcaster: nil) returning
 # a fresh, empty store.
+#
+# Siblings covering the rest of the backend-neutral behavior:
+# SpecialCharactersContract, ClientContract, DecisionModelContract,
+# UpcasterContract.
 module StoreContract
   # --- append ---
 
@@ -107,6 +112,10 @@ module StoreContract
     assert_raises(DcbEventStore::ConditionNotMet) do
       @store.append([DcbEventStore::Event.new(type: "Another")], condition)
     end
+  end
+
+  def test_condition_not_met_is_rescuable
+    assert DcbEventStore::ConditionNotMet < StandardError
   end
 
   def test_failed_append_leaves_no_data
@@ -285,6 +294,29 @@ module StoreContract
     assert_equal ["student:s1", "course:c1"], events[0].tags
   end
 
+  # A tag repeated on one event, and a duplicate tag in the query itself, must
+  # not change what matches: backends that count tag matches in an index table
+  # have to deduplicate both sides.
+  def test_read_matches_event_with_duplicate_tags
+    @store.append([DcbEventStore::Event.new(type: "A", tags: %w[dup dup])])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["dup"])
+                                     ])
+    events = @store.read(query).to_a
+    assert_equal 1, events.size
+    assert_equal %w[dup dup], events[0].tags
+  end
+
+  def test_read_with_duplicate_tags_in_query
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1", "t:1"])
+                                     ])
+    assert_equal 1, @store.read(query).to_a.size
+  end
+
   def test_read_or_across_query_items
     @store.append([DcbEventStore::Event.new(type: "A", tags: ["x:1"])])
     @store.append([DcbEventStore::Event.new(type: "B", tags: ["y:2"])])
@@ -387,6 +419,47 @@ module StoreContract
     assert events[0].sequence_position > appended[1].sequence_position
   end
 
+  def test_read_from_with_filtered_query
+    appended = 5.times.flat_map { @store.append([DcbEventStore::Event.new(type: "A")]) }
+    5.times { @store.append([DcbEventStore::Event.new(type: "B")]) }
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: ["A"])
+                                     ])
+    after = appended[2].sequence_position
+    events = @store.read_from(query, after: after).to_a
+    assert_equal 2, events.size
+    assert(events.all? { |e| e.type == "A" && e.sequence_position > after })
+  end
+
+  def test_read_from_zero_returns_all
+    3.times { @store.append([DcbEventStore::Event.new(type: "X")]) }
+
+    events = @store.read_from(DcbEventStore::Query.all, after: 0).to_a
+    assert_equal 3, events.size
+  end
+
+  def test_read_from_multi_item_query_with_after
+    appended = %w[A B C A B].flat_map { |type| @store.append([DcbEventStore::Event.new(type: type)]) }
+
+    query = DcbEventStore::Query.new([
+                                       DcbEventStore::QueryItem.new(event_types: ["A"]),
+                                       DcbEventStore::QueryItem.new(event_types: ["C"])
+                                     ])
+    after = appended[1].sequence_position
+    events = @store.read_from(query, after: after).to_a
+    assert_equal %w[C A], events.map(&:type)
+    assert(events.all? { |e| e.sequence_position > after })
+  end
+
+  def test_read_from_beyond_last_returns_empty
+    appended = @store.append([DcbEventStore::Event.new(type: "X")])
+
+    events = @store.read_from(DcbEventStore::Query.all,
+                              after: appended[0].sequence_position + 100).to_a
+    assert_empty events
+  end
+
   # --- instrumentation ---
 
   def test_append_emits_instrumentation_event
@@ -442,17 +515,43 @@ module StoreContract
     DcbEventStore.instrumentation = previous
   end
 
-  # --- upcaster ---
+  # --- pagination ---
 
-  def test_upcaster_applied_on_read
-    upcaster = DcbEventStore::Upcaster.new
-    upcaster.register("A", from_version: 1) { |data| data.merge(upgraded: true) }
-    store = build_store(upcaster: upcaster)
+  # SQL backends read in batches of BATCH_SIZE using keyset pagination on
+  # sequence_position, so a result set larger than one batch must come back
+  # complete, in order, and without duplicates or gaps at the boundary.
+  BATCH_SIZE = DcbEventStore::SqlStore::BATCH_SIZE
+  APPEND_CHUNK = 500
 
-    store.append([DcbEventStore::Event.new(type: "A", data: {x: 1})])
+  def test_read_returns_all_rows_across_batch_boundary
+    total = (BATCH_SIZE * 2) + 50
+    append_many(total)
 
-    event = store.read(DcbEventStore::Query.all).first
-    assert_equal({x: 1, upgraded: true}, event.data)
-    assert_equal 2, event.schema_version
+    positions = @store.read(DcbEventStore::Query.all).map(&:sequence_position)
+
+    assert_equal total, positions.size
+    assert_equal positions.sort, positions
+    assert_equal positions.uniq, positions
+  end
+
+  def test_read_from_paginates_across_batch_boundary
+    total = BATCH_SIZE + 25
+    appended = append_many(total)
+    after = appended[9].sequence_position
+
+    positions = @store.read_from(DcbEventStore::Query.all, after: after).map(&:sequence_position)
+
+    assert_equal total - 10, positions.size
+    assert(positions.all? { |p| p > after })
+    assert_equal positions.sort, positions
+    assert_equal positions.uniq, positions
+  end
+
+  # Appends `count` events in chunks, so crossing the read batch boundary
+  # does not depend on any backend-specific bulk insert.
+  def append_many(count, type: "A")
+    (1..count).each_slice(APPEND_CHUNK).flat_map do |slice|
+      @store.append(slice.map { DcbEventStore::Event.new(type: type) })
+    end
   end
 end

@@ -8,9 +8,10 @@
 # track pending state, usage, and expiry.
 #
 # Usage: ruby examples/opt_in_token.rb
+#        DCB_BACKEND=sqlite ruby examples/opt_in_token.rb   # or postgres (default), memory
 
 require_relative "../lib/dcb_event_store"
-require "pg"
+require_relative "support/backend"
 require "securerandom"
 
 module OptInToken
@@ -77,13 +78,11 @@ module OptInToken
   # -- Demo ------------------------------------------------------------------
 
   def self.run
-    conn = PG.connect(dbname: "dcb_event_store_test")
-    conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::Schema.create!(conn)
-    conn.exec("TRUNCATE events RESTART IDENTITY")
-    store = DcbEventStore::Store.new(conn)
-    client = DcbEventStore::Client.new(store)
+    Examples::Backend.with_store { |store| demo(DcbEventStore::Client.new(store)) }
+  end
 
+  # The example itself, on whichever backend DCB_BACKEND selected.
+  def self.demo(client)
     puts "=== Opt-In Token (DCB Example) ==="
     puts
 
@@ -140,8 +139,6 @@ module OptInToken
 
     puts
     puts "Done. #{client.read(DcbEventStore::Query.all).count} events total."
-  ensure
-    conn&.close
   end
 end
 

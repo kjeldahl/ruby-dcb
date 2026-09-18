@@ -1,13 +1,13 @@
 require_relative "../test_helper"
-require_relative "../support/database"
+require_relative "../support/postgres_database"
 
 class TestSubscribe < Minitest::Test
-  cover "DcbEventStore::Store#subscribe"
+  cover "DcbEventStore::SqlStore#subscribe"
   # The delivery helpers' return value (last delivered position) drives the
   # live loop's resume position, which only PG subscribe tests can observe.
   cover "DcbEventStore::StoreInstrumentation*"
 
-  include DatabaseHelper
+  include PostgresDatabaseHelper
 
   def setup
     setup_db
@@ -21,8 +21,8 @@ class TestSubscribe < Minitest::Test
     received = []
 
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
-      store = DcbEventStore::Store.new(conn)
+      conn = PostgresDatabaseHelper.connection
+      store = DcbEventStore::PostgresStore.new(conn)
       store.subscribe(DcbEventStore::Query.all, after: 0) do |event|
         received << event
         break if received.size >= 1
@@ -47,8 +47,8 @@ class TestSubscribe < Minitest::Test
     received = []
 
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
-      store = DcbEventStore::Store.new(conn)
+      conn = PostgresDatabaseHelper.connection
+      store = DcbEventStore::PostgresStore.new(conn)
       store.subscribe(DcbEventStore::Query.all) do |event|
         received << event
         break if received.size >= 3
@@ -70,8 +70,8 @@ class TestSubscribe < Minitest::Test
     received = []
 
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
-      store = DcbEventStore::Store.new(conn)
+      conn = PostgresDatabaseHelper.connection
+      store = DcbEventStore::PostgresStore.new(conn)
       query = DcbEventStore::Query.new([
                                          DcbEventStore::QueryItem.new(event_types: ["Wanted"])
                                        ])
@@ -103,7 +103,7 @@ class TestSubscribe < Minitest::Test
 
     emitted = drain(seen)
     assert_equal(%i[catch_up live], emitted.map { |e| e.payload[:phase] })
-    assert_equal "DcbEventStore::Store", emitted[0].payload[:store]
+    assert_equal "DcbEventStore::PostgresStore", emitted[0].payload[:store]
     assert_equal([1, 2], emitted.map { |e| e.payload[:sequence_position] })
     emitted.each do |event|
       assert_kind_of Float, event.payload[:lag]
@@ -147,8 +147,8 @@ class TestSubscribe < Minitest::Test
   def run_subscriber(expected:, subscribe_instrumentation: :event)
     received = []
     subscriber = Thread.new do
-      conn = DatabaseHelper.connection
-      store = DcbEventStore::Store.new(conn, subscribe_instrumentation: subscribe_instrumentation)
+      conn = PostgresDatabaseHelper.connection
+      store = DcbEventStore::PostgresStore.new(conn, subscribe_instrumentation: subscribe_instrumentation)
       store.subscribe(DcbEventStore::Query.all, after: 0) do |event|
         received << event
         break if received.size >= expected
@@ -170,8 +170,8 @@ class TestSubscribe < Minitest::Test
   end
 
   def test_subscribe_unlisten_on_block_raise
-    conn = DatabaseHelper.connection
-    store = DcbEventStore::Store.new(conn)
+    conn = PostgresDatabaseHelper.connection
+    store = DcbEventStore::PostgresStore.new(conn)
 
     # Need an event so catch-up yields and triggers the raise
     @store.append([DcbEventStore::Event.new(type: "Trigger")])

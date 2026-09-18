@@ -10,7 +10,7 @@ module DcbEventStore
   #   dcb.subscribe.lag          distribution (ms)  live delivery lag
   #
   # Metrics are tagged with the emitting store (demodulized, e.g.
-  # store=Store); dcb.subscribe.delivered additionally carries
+  # store=PostgresStore); dcb.subscribe.delivered additionally carries
   # phase=live/catch_up. Delivery lag is recorded only for the :live phase
   # - catch-up replays history, where large lag is expected and would
   # poison the staleness signal - and comes from lag: (per-event mode) or

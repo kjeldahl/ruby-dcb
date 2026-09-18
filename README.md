@@ -1,20 +1,63 @@
 # dcb_event_store
 
-A Ruby implementation of the [Dynamic Consistency Boundary (DCB)](https://dcb.events) event store pattern, backed by PostgreSQL.
+A Ruby implementation of the [Dynamic Consistency Boundary (DCB)](https://dcb.events) event store pattern, backed by PostgreSQL or SQLite.
 
 DCB is an alternative to stream-based event stores. Instead of partitioning events into streams with per-stream optimistic concurrency, DCB uses **tags** to define dynamic consistency boundaries and **append conditions** for cross-entity optimistic concurrency checks. A single event can belong to multiple consistency boundaries through its tags.
 
 ## Requirements
 
 - Ruby >= 3.3
-- PostgreSQL
+- A driver for the backend you use, added to **your** Gemfile — the gem depends on neither:
+  - [`pg`](https://rubygems.org/gems/pg) for PostgreSQL (`PostgresStore`)
+  - [`sqlite3`](https://rubygems.org/gems/sqlite3) >= 2.0 for SQLite (`SqliteStore`), which bundles SQLite >= 3.45; SQLite >= 3.35 is the minimum (`RETURNING`)
+
+Each backend file loads its driver lazily, so an application that only uses one never needs the other installed. The backend classes and their collaborators are themselves loaded on first reference, so an application only loads the backend it constructs.
 
 ## Setup
 
-```bash
-bundle install
-createdb dcb_event_store_test
+```ruby
+# Gemfile
+gem "dcb_event_store"
+gem "pg"        # for PostgresStore
+gem "sqlite3"   # for SqliteStore
 ```
+
+PostgreSQL needs a database; the schema is installed by the gem:
+
+```bash
+createdb my_event_store
+```
+
+```ruby
+conn = PG.connect(dbname: "my_event_store")
+DcbEventStore::PostgresStore::Schema.create!(conn)
+```
+
+SQLite needs no setup beyond a path — `create!` installs the schema and the connection pragmas (WAL, busy handler) the store expects:
+
+```ruby
+db = SQLite3::Database.new("events.sqlite3")
+DcbEventStore::SqliteStore::Schema.create!(db)
+```
+
+Both are idempotent (`CREATE TABLE IF NOT EXISTS`), so they can run at boot. `Schema.configure!(db)` alone applies the pragmas to a further SQLite connection on an existing database.
+
+## Choosing a backend
+
+Both backends implement the same API and pass the same contract suite; the differences are operational:
+
+| | `PostgresStore` | `SqliteStore` |
+|---|-----------------|---------------|
+| append serialization | per-tag advisory locks — appends to disjoint tags run in parallel | one writer database-wide (`BEGIN IMMEDIATE`) |
+| subscribe wake-up | `LISTEN/NOTIFY`, no polling | polls `PRAGMA data_version` every `poll_interval:` (default 0.1s) |
+| `created_at` precision | microseconds | milliseconds |
+| tag lookup | GIN index on the `tags` column | `event_tags(tag, sequence_position)` index table |
+| in-memory database | n/a | `:memory:` belongs to the connection that opened it — use a file database for anything multi-connection, including `subscribe` |
+| shared by several hosts | yes | no: one filesystem |
+
+Rule of thumb: SQLite for single-host deployments, embedded use and test suites that want real SQL; PostgreSQL when appends must proceed in parallel across disjoint consistency boundaries, when several hosts share the store, or when subscribers should wake without polling. `InMemoryStore` (below) covers unit tests that want no database at all.
+
+See `examples/BENCHMARK.md` for the two backends measured side by side.
 
 ## Usage
 
@@ -22,11 +65,25 @@ createdb dcb_event_store_test
 
 ```ruby
 require "dcb_event_store"
+require "pg"
 
-conn = PG.connect(dbname: "dcb_event_store_test")
-DcbEventStore::Schema.create!(conn)
-store = DcbEventStore::Store.new(conn)
+conn = PG.connect(dbname: "my_event_store")
+DcbEventStore::PostgresStore::Schema.create!(conn)
+store = DcbEventStore::PostgresStore.new(conn)
 ```
+
+Or on SQLite, with the same API:
+
+```ruby
+require "dcb_event_store"
+require "sqlite3"
+
+db = SQLite3::Database.new("events.sqlite3")
+DcbEventStore::SqliteStore::Schema.create!(db)
+store = DcbEventStore::SqliteStore.new(db)               # poll_interval: 0.1 by default
+```
+
+Everything below works the same on either store (and on `InMemoryStore`); the examples use whichever one they were given.
 
 **Events** have a type, data hash, and tags array:
 
@@ -121,7 +178,7 @@ upcaster.register("CourseDefined", from_version: 1) do |data|
   data.merge(status: "active")  # v1 -> v2: add default status
 end
 
-store = DcbEventStore::Store.new(conn, upcaster: upcaster)
+store = DcbEventStore::PostgresStore.new(conn, upcaster: upcaster)
 ```
 
 ### Real-time subscriptions
@@ -133,6 +190,14 @@ end
 ```
 
 Uses PostgreSQL `LISTEN/NOTIFY` with catch-up reads.
+
+On SQLite there is no `LISTEN/NOTIFY`, so the same call polls: it sleeps `poll_interval:` (default 0.1s) and only reads again once the database changed.
+
+```ruby
+store = DcbEventStore::SqliteStore.new(db, poll_interval: 0.05)
+```
+
+A subscriber should open its **own `SQLite3::Database` on the same file** (the change check is `PRAGMA data_version`, which only moves for other connections' commits; a store appending and subscribing over one connection is detected too, through that connection's own change counter). A `:memory:` database belongs to the connection that opened it and cannot be subscribed to from another one.
 
 ### Instrumentation (observability)
 
@@ -154,11 +219,11 @@ Emitted events and payloads:
 
 | Event | Emitted by | Payload |
 |-------|------------|---------|
-| `append.dcb` | `Store#append`, `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
-| `read.dcb` | `Store#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
+| `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
+| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
 | `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:` |
-| `subscribe.dcb` | `Store#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
+| `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
 
@@ -169,24 +234,24 @@ Reads are lazy enumerators, so `read.dcb` fires when the enumeration finishes (c
 `subscribe.dcb` measures **delivery lag** — the wall-clock time between an event being stored (`created_at`) and its delivery to the subscriber block. It's the staleness signal for anything built on `subscribe` (projectors, read models, process managers); an alert on growing lag is the classic "consumer is falling behind" indicator. Emission granularity is configured per store:
 
 ```ruby
-store = DcbEventStore::Store.new(conn)                                    # :event (default)
-store = DcbEventStore::Store.new(conn, subscribe_instrumentation: :batch) # one event per delivery round
+store = DcbEventStore::PostgresStore.new(conn)                                    # :event (default)
+store = DcbEventStore::PostgresStore.new(conn, subscribe_instrumentation: :batch) # one event per delivery round
 ```
 
 - `:event` — one `subscribe.dcb` per delivered event with its `sequence_position:` and `lag:`; `event.duration` is the handler time, so transport lag and slow handlers can be told apart.
-- `:batch` — one `subscribe.dcb` per delivery round (the whole catch-up, then one per `NOTIFY` wake-up) with `event_count:`, `last_position:` and `max_lag:`; `event.duration` spans the read plus all handler calls. Use this for high-throughput subscriptions where per-event emission is too noisy.
+- `:batch` — one `subscribe.dcb` per delivery round (the whole catch-up, then one per wake-up) with `event_count:`, `last_position:` and `max_lag:`; `event.duration` spans the read plus all handler calls. Use this for high-throughput subscriptions where per-event emission is too noisy.
 
 `phase:` distinguishes `:catch_up` (replaying history, where large lag is expected and shouldn't pollute live-lag metrics) from `:live` deliveries. A handler that raises publishes the event with `event.error` set before the exception propagates. Whether a delivery round is instrumented is decided per round, so subscribers attached mid-subscription observe subsequent rounds.
 
-**Clock skew caveat**: `created_at` is stamped by the PostgreSQL server clock, while lag is measured against the consumer host's clock. When these are different machines, lag absorbs any skew between them and can even come out slightly negative. Keep both hosts NTP-synced and treat lag as a trend/magnitude signal rather than a precise measurement. (The alternative — measuring from `NOTIFY` arrival — would miss time spent committed-but-undelivered, which is usually the point of the metric.)
+**Clock skew caveat**: `created_at` is stamped by the database clock (the PostgreSQL server, or the SQLite process itself), while lag is measured against the consumer host's clock. When these are different machines, lag absorbs any skew between them and can even come out slightly negative. Keep both hosts NTP-synced and treat lag as a trend/magnitude signal rather than a precise measurement. (The alternative — measuring from `NOTIFY` arrival — would miss time spent committed-but-undelivered, which is usually the point of the metric.)
 
-**InMemoryStore caveat**: the in-memory store delivers subscriptions synchronously on the appender's thread, so its `:live` events are published during `append` and its lag values are just in-process dispatch overhead (~0). It emits the same event shape so application tests can assert on `subscribe.dcb`, but the lag numbers are only meaningful for the PostgreSQL-backed `Store`.
+**InMemoryStore caveat**: the in-memory store delivers subscriptions synchronously on the appender's thread, so its `:live` events are published during `append` and its lag values are just in-process dispatch overhead (~0). It emits the same event shape so application tests can assert on `subscribe.dcb`, but the lag numbers are only meaningful for the SQL stores.
 
 `DcbEventStore::LogSubscriber` is a proof-of-concept adapter that logs one line per event, and the reference for richer connectors (AppSignal, Prometheus, ...):
 
 ```ruby
 DcbEventStore::LogSubscriber.new.attach_to   # logs to $stdout
-# I, [...]  INFO -- : append.dcb (1.42ms) store=DcbEventStore::Store event_count=2 event_types=[CourseDefined] condition=true appended_count=2 last_position=17
+# I, [...]  INFO -- : append.dcb (1.42ms) store=DcbEventStore::PostgresStore event_count=2 event_types=[CourseDefined] condition=true appended_count=2 last_position=17
 
 DcbEventStore::LogSubscriber.new(logger: Rails.logger, pattern: "append.dcb").attach_to
 ```
@@ -198,8 +263,8 @@ DcbEventStore::LogSubscriber.new(logger: Rails.logger, pattern: "append.dcb").at
 ```ruby
 # In config/initializers/dcb_event_store.rb
 DcbEventStore::RailsLogSubscriber.new.attach_to
-#   DCB Append (1.4ms)  store=DcbEventStore::Store event_count=2 event_types=[CourseDefined] condition=true appended_count=2 last_position=17
-#   DCB Read (0.5ms)  store=DcbEventStore::Store query=... after= event_count=12
+#   DCB Append (1.4ms)  store=DcbEventStore::PostgresStore event_count=2 event_types=[CourseDefined] condition=true appended_count=2 last_position=17
+#   DCB Read (0.5ms)  store=DcbEventStore::PostgresStore query=... after= event_count=12
 ```
 
 It reuses the same ANSI color codes `ActiveSupport::LogSubscriber` uses (label in bold; red on error), but **takes no dependency on Rails or ActiveSupport** — it logs to `Rails.logger` when Rails is loaded and falls back to `$stdout` otherwise. Override with `logger:`, `pattern:`, or `colorize:` (the last is handy for non-TTY log destinations):
@@ -255,7 +320,7 @@ DcbEventStore::AppsignalSubscriber.new.attach_to
 | `dcb.subscribe.delivered` | counter | events delivered to subscribers, tagged `phase=live/catch_up` |
 | `dcb.subscribe.lag` | distribution (ms) | live delivery lag — the staleness signal; alert on its p95/p99 |
 
-Metrics are tagged with the emitting store (`store=Store` / `store=InMemoryStore`). The adapter encodes the gem's semantics: delivery lag is recorded **only for the `:live` phase** (catch-up replays history, where large lag is expected and would poison the staleness signal), and comes from `lag:` or `max_lag:` depending on the store's `subscribe_instrumentation:` mode.
+Metrics are tagged with the emitting store (`store=PostgresStore` / `store=SqliteStore` / `store=InMemoryStore`). The adapter encodes the gem's semantics: delivery lag is recorded **only for the `:live` phase** (catch-up replays history, where large lag is expected and would poison the staleness signal), and comes from `lag:` or `max_lag:` depending on the store's `subscribe_instrumentation:` mode.
 
 Because metrics are recorded after each operation completes, the adapter works against either instrumentation engine. For spans inside request traces, use `ActiveSupportInstrumentation` and wrap application entry points with `Appsignal.instrument`.
 
@@ -263,26 +328,32 @@ Because metrics are recorded after each operation completes, the adapter works a
 
 ### In-memory store for fast tests
 
-`InMemoryStore` is a drop-in replacement for `Store` with no PostgreSQL dependency, making application test suites (and especially mutation testing) much faster:
+`InMemoryStore` is a drop-in replacement for either SQL store that needs no database at all, making application test suites (and especially mutation testing) much faster:
 
 ```ruby
-store = DcbEventStore::InMemoryStore.new   # accepts upcaster: like Store
+store = DcbEventStore::InMemoryStore.new   # accepts upcaster: like the SQL stores
 client = DcbEventStore::Client.new(store)
 ```
 
-It implements the same API and semantics — append conditions, idempotent writes, query filtering, upcasting — verified by a shared contract suite (`test/support/store_contract.rb`) that runs against both implementations, plus a side-by-side equivalence test.
+It implements the same API and semantics — append conditions, idempotent writes, query filtering, upcasting — verified by the shared contract suite (`test/support/store_contract.rb`) that runs against all three stores, plus a side-by-side equivalence test.
 
-Limitations: it is **single-threaded** (no locking; intended for tests only), and `subscribe` does not block on `LISTEN/NOTIFY` — it catches up and then delivers matching events synchronously as they are appended.
+Limitations: it is **single-threaded** (no locking; intended for tests only), reads scan the whole log, and `subscribe` never blocks — it catches up and then delivers matching events synchronously as they are appended. For tests that need real SQL without a server, use `SqliteStore` on a temporary file.
 
 ## Tests
 
 ```bash
 bundle exec rake                                    # all tests
 bundle exec mutant run                              # mutation testing (all subjects)
-bundle exec mutant run 'DcbEventStore::Store#append' # single method
+bundle exec mutant run 'DcbEventStore::SqlStore#append' # single method
 ```
 
-87 tests covering unit, integration, and concurrency scenarios (20-thread races, retry-after-conflict, event count integrity under 50-thread load). Mutation testing via [mutant](https://github.com/mbj/mutant) verifies test effectiveness.
+`rake` runs everything: the unit tier and the SQLite tier need no server, the PostgreSQL tier expects `dcb_event_store_test` to exist. The SQLite and unit tiers can be run on their own, without PostgreSQL:
+
+```bash
+bundle exec ruby -Itest -e 'Dir["test/{unit,sqlite}/**/test_*.rb"].each { |f| require File.expand_path(f) }'
+```
+
+Unit, integration, SQLite and concurrency scenarios (20-thread races, retry-after-conflict, event count integrity under 50-thread load), with the backend-neutral behavior expressed once as shared contracts (`test/support/*_contract.rb`) and run against every backend. Mutation testing via [mutant](https://github.com/mbj/mutant) verifies test effectiveness.
 
 ## Examples
 
@@ -305,20 +376,41 @@ Run any example:
 bundle exec ruby examples/course_subscriptions.rb
 ```
 
-Run the performance benchmark:
+`DCB_BACKEND` picks the store they run on — `postgres` (default), `sqlite` or `memory`:
 
 ```bash
-bundle exec ruby examples/performance.rb              # 100k students, 500 courses
-bundle exec ruby examples/performance.rb 1000000 2000  # 1M students, 2k courses
+DCB_BACKEND=sqlite bundle exec ruby examples/course_subscriptions.rb
+DCB_BACKEND=memory bundle exec ruby examples/course_subscriptions.rb
+```
+
+Every example produces the same output on all three (`examples/support/backend.rb` is the factory). `performance.rb` runs on the two SQL backends:
+
+```bash
+bundle exec ruby examples/performance.rb                             # 100k students, 500 courses
+bundle exec ruby examples/performance.rb 1000000 2000                # 1M students, 2k courses
+DCB_BACKEND=sqlite bundle exec ruby examples/performance.rb 20000 100
 ```
 
 See `examples/BENCHMARK.md` for performance findings.
 
+## Upgrading
+
+The PostgreSQL store used to be the only one, and carried the unqualified names. They still resolve, as deprecated aliases:
+
+| Old | New |
+|-----|-----|
+| `DcbEventStore::Store` | `DcbEventStore::PostgresStore` |
+| `DcbEventStore::Schema` | `DcbEventStore::PostgresStore::Schema` |
+| `DcbEventStore::PgArrayCodec` | `DcbEventStore::PostgresStore::ArrayCodec` |
+
+Nested constants resolve through the alias too (`Store::LockKeys`), so nothing breaks. Ruby reports each use as a deprecated constant when deprecation warnings are enabled (`ruby -w`, `-W:deprecated`, `Warning[:deprecated] = true`).
+
 ## Architecture
 
-- **No ORM** — raw `pg` gem, minimal SQL surface
-- **Advisory lock** (`pg_advisory_xact_lock`) for serialized append condition checks
-- **GIN index** on `tags` column for efficient tag-based queries
-- **Append-only** — database trigger prevents UPDATE/DELETE
+- **No ORM** — raw `pg` / `sqlite3` driver, minimal SQL surface
+- **One template, two backends** — `SqlStore` holds read/append/subscribe; each backend supplies a handful of hooks and a `Dialect`
+- **Serialized condition checks** — advisory locks per tag on PostgreSQL, `BEGIN IMMEDIATE` on SQLite
+- **Indexed tags** — GIN index on the `tags` column on PostgreSQL, an `event_tags` index table on SQLite
+- **Append-only** — database triggers prevent UPDATE/DELETE
 - **Idempotent writes** — `ON CONFLICT (event_id) DO NOTHING`
 - **`Data.define`** for immutable value objects (Event, SequencedEvent, Query, etc.)

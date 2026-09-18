@@ -1,6 +1,12 @@
 integration: minitest
 requires:
   - ./lib/dcb_event_store
+  # The backends are autoloaded, and mutant enumerates its subjects from the
+  # modules already loaded, so the backend files are required here explicitly
+  # -- without them the backend subjects below would simply not be found.
+  - ./lib/dcb_event_store/postgres_store
+  - ./lib/dcb_event_store/sqlite_store
+  - ./lib/dcb_event_store/store
   - ./test/test_helper
   - ./test/unit/test_event
   - ./test/unit/test_query
@@ -15,17 +21,23 @@ requires:
   - ./test/unit/test_rails_log_subscriber
   - ./test/unit/test_appsignal_subscriber
   - ./test/unit/test_instrumentation
-  - ./test/unit/test_pg_array_codec
+  - ./test/unit/test_postgres_array_codec
+  - ./test/unit/test_postgres_dialect
   - ./test/unit/test_sql_builder
+  - ./test/unit/test_row_mapper
+  - ./test/unit/test_sql_store
+  - ./test/unit/test_sqlite_dialect
   - ./test/unit/test_lock_keys
-  - ./test/integration/test_store_append
-  - ./test/integration/test_store_read
-  - ./test/integration/test_read_from
+  - ./test/integration/test_append_only
   - ./test/integration/test_subscribe
   - ./test/integration/test_client
   - ./test/integration/test_decision_model
   - ./test/integration/test_upcaster_integration
   - ./test/integration/test_store_equivalence
+  - ./test/sqlite/test_sqlite_store
+  - ./test/sqlite/test_schema
+  - ./test/sqlite/test_subscribe
+  - ./test/sqlite/test_concurrent_append
   - ./test/concurrency/test_concurrent_append
 jobs: 1
 usage: opensource
@@ -46,18 +58,38 @@ matcher:
     - DcbEventStore::RailsLogSubscriber*
     - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
-    # Pure collaborators extracted from Store: SQL building, advisory-lock key
-    # derivation and PG array codec. Fast to mutate (no live PG) and fully
-    # covered by dedicated unit tests.
-    - DcbEventStore::PgArrayCodec*
-    - DcbEventStore::Store::SqlBuilder*
-    - DcbEventStore::Store::LockKeys*
-# Store itself and its RowMapper are left out on purpose: what remains is thin
-# PG glue (transactions, exec_params, LISTEN/NOTIFY) and row mapping over
-# trusted SELECT * rows. Their mutations are dominated by equivalent edits --
-# SQL-string tweaks, row["x"] -> row.fetch("x"), .to_i -> Integer(...) -- that
-# only differ on inputs Postgres never produces, so pinning them would mean
-# contrived, out-of-contract tests. Both are covered by unit and integration
-# tests; the genuinely branching logic now lives in the pure subjects above.
-#    - DcbEventStore::Store*
-#    - DcbEventStore::Store::RowMapper*
+    # Pure collaborators extracted from the stores: SQL building, the PG
+    # dialect it is parametrized with, advisory-lock key derivation and the PG
+    # array codec. Fast to mutate (no live PG) and fully covered by dedicated
+    # unit tests.
+    - DcbEventStore::SqlStore::SqlBuilder*
+    - DcbEventStore::PostgresStore::Dialect*
+    - DcbEventStore::SqliteStore::Dialect*
+    - DcbEventStore::PostgresStore::ArrayCodec*
+    - DcbEventStore::PostgresStore::LockKeys*
+# The four store subjects below are left out on purpose: what remains in them
+# is thin driver glue (transactions, exec_params, LISTEN/NOTIFY, BEGIN
+# IMMEDIATE), the read/append/subscribe orchestration over those hooks, and
+# row mapping over trusted SELECT * rows. Their mutations are dominated by
+# equivalent edits -- SQL-string tweaks, row["x"] -> row.fetch("x"), .to_i ->
+# Integer(...) -- that only differ on inputs the databases never produce, so
+# pinning them would mean contrived, out-of-contract tests. All four are
+# covered by unit, integration and SQLite tests; the genuinely branching
+# logic lives in the pure subjects above. Measured for reference:
+#
+# - SqlStore*: ~87%. Survivors are hook-call and loop-shape equivalents in
+#   append/read/subscribe.
+# - SqliteStore*: 98.34%, 9 of 543 alive (with the subscribe and concurrency
+#   tests in place). The polling hooks (#listen, #wait_for_append) are fully
+#   covered; what survives are .to_i on a value SQLite already types as
+#   Integer (3), row["x"] -> row.fetch("x") (1), dropping the rescue that
+#   swallows a failing ROLLBACK (1), and removing "PRAGMA synchronous=NORMAL"
+#   (4), which this SQLite build already defaults to for a WAL database.
+# - SqlStore::RowMapper*: 95.27%, 12 of 254 alive with test_row_mapper -- all
+#   row.fetch / is_a? -> instance_of? equivalents on driver-supplied rows.
+# - PostgresStore*: not measured; every mutation needs a live server, and its
+#   remaining methods are the exec_params and advisory-lock glue above.
+#    - DcbEventStore::PostgresStore*
+#    - DcbEventStore::SqliteStore*
+#    - DcbEventStore::SqlStore*
+#    - DcbEventStore::SqlStore::RowMapper*

@@ -1,6 +1,7 @@
 module DcbEventStore
-  # Shared instrumentation emission for store implementations. Both Store
-  # and InMemoryStore wrap their operations through these helpers so
+  # Shared instrumentation emission for store implementations. Both the
+  # SQL-backed stores and InMemoryStore wrap their operations through these
+  # helpers so
   # subscribers observe identical events regardless of backend.
   #
   # Reads are lazy enumerators, so the "read.dcb" event is published when
@@ -21,7 +22,7 @@ module DcbEventStore
   # - InMemoryStore delivers synchronously on the appender's thread, so
   #   its lag is just in-process dispatch overhead (~0); events are
   #   emitted with the same shape so app tests can assert on them, but
-  #   the lag values are only meaningful for the PostgreSQL-backed Store.
+  #   the lag values are only meaningful for PostgresStore.
   #
   # Emission granularity is configured per store via the
   # subscribe_instrumentation: constructor option:

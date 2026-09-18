@@ -9,9 +9,10 @@
 #   - Optimistic concurrency via append conditions
 #
 # Usage: ruby examples/course_subscriptions.rb
+#        DCB_BACKEND=sqlite ruby examples/course_subscriptions.rb   # or postgres (default), memory
 
 require_relative "../lib/dcb_event_store"
-require "pg"
+require_relative "support/backend"
 
 module CourseSubscriptions
   MAX_STUDENT_COURSES = 5
@@ -145,13 +146,11 @@ module CourseSubscriptions
   # -- Demo ------------------------------------------------------------------
 
   def self.run
-    conn = PG.connect(dbname: "dcb_event_store_test")
-    conn.exec("SET client_min_messages TO warning")
-    DcbEventStore::Schema.create!(conn)
-    conn.exec("TRUNCATE events RESTART IDENTITY")
-    store = DcbEventStore::Store.new(conn)
-    client = DcbEventStore::Client.new(store)
+    Examples::Backend.with_store { |store| demo(DcbEventStore::Client.new(store)) }
+  end
 
+  # The example itself, on whichever backend DCB_BACKEND selected.
+  def self.demo(client)
     puts "=== Course Subscriptions (DCB Example) ==="
     puts
 
@@ -229,8 +228,6 @@ module CourseSubscriptions
 
     puts
     puts "Done. #{client.read(DcbEventStore::Query.all).count} events total."
-  ensure
-    conn&.close
   end
 end
 
