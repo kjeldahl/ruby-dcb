@@ -59,6 +59,10 @@ module DcbEventStore
         DROP TABLE IF EXISTS events;
       SQL
 
+      # How long a connection waits for the database's write lock before it
+      # gives up with SQLite3::BusyException.
+      BUSY_TIMEOUT_MS = 5000
+
       def self.create!(db)
         configure!(db)
         db.execute_batch(CREATE_SQL)
@@ -74,11 +78,17 @@ module DcbEventStore
       # immediately, and hash rows because the row mapper reads rows by column
       # name. Per connection, not per database, so every connection opened
       # against the file goes through here.
+      #
+      # The wait is #busy_handler_timeout=, not SQLite's own busy_timeout:
+      # SQLite's handler sleeps inside the C call, which keeps Ruby's global
+      # VM lock, so a thread waiting for the lock would stop the thread
+      # holding it from ever committing. The gem's handler retries in Ruby and
+      # releases the VM lock while it waits.
       def self.configure!(db)
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA synchronous=NORMAL")
-        db.busy_timeout = 5000
+        db.busy_handler_timeout = BUSY_TIMEOUT_MS
         db.results_as_hash = true
       end
     end

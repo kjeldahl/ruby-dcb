@@ -29,6 +29,8 @@ requires:
   - ./test/integration/test_store_equivalence
   - ./test/sqlite/test_sqlite_store
   - ./test/sqlite/test_schema
+  - ./test/sqlite/test_subscribe
+  - ./test/sqlite/test_concurrent_append
   - ./test/concurrency/test_concurrent_append
 jobs: 1
 usage: opensource
@@ -68,11 +70,13 @@ matcher:
 # tests; the genuinely branching logic now lives in the pure subjects above.
 # (Measured for reference: SqlStore's own methods kill ~87% -- the survivors
 # are hook-call and loop-shape equivalents in append/read/subscribe.)
-# SqliteStore's own methods are left out for the same reason (measured: 89%
-# coverage). The survivors are equivalent edits -- .to_i on a value SQLite
-# already types as Integer, row["x"] -> row.fetch("x"), dropping the rescue
-# that swallows a failing ROLLBACK -- plus the subscribe hooks, which are
-# placeholders until the polling loop lands.
+# SqliteStore's own methods are left out for the same reason (measured with
+# the subscribe and concurrency tests in place: 98.34%, 9 of 543 mutations
+# alive). The polling hooks (#listen, #wait_for_append) are fully covered; what
+# survives are equivalent edits only: .to_i on a value SQLite already types as
+# Integer (3), row["x"] -> row.fetch("x") (1), dropping the rescue that
+# swallows a failing ROLLBACK (1), and removing "PRAGMA synchronous=NORMAL"
+# (4), which this SQLite build already defaults to for a WAL database.
 #    - DcbEventStore::PostgresStore*
 #    - DcbEventStore::SqliteStore*
 #    - DcbEventStore::SqlStore*

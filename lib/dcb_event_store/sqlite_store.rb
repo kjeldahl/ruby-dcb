@@ -14,9 +14,15 @@ module DcbEventStore
   # table, which the tag containment query joins against in place of
   # PostgreSQL's GIN index.
   #
+  # Subscribers poll instead of waiting for a notification: SQLite has no
+  # LISTEN/NOTIFY, so #wait_for_append sleeps poll_interval and checks two
+  # cheap change counters before the subscribe loop reads again.
+  #
   # The schema must be installed (or at least Schema.configure! run) on the
   # connection before use.
   class SqliteStore < SqlStore
+    attr_reader :poll_interval
+
     def initialize(db, upcaster: nil, subscribe_instrumentation: :event, poll_interval: 0.1)
       super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
       @db = db
@@ -63,12 +69,44 @@ module DcbEventStore
     # nothing to announce.
     def notify_appended(_position); end
 
-    def listen; end
+    # Records the change counters #wait_for_append compares against, so the
+    # first poll only reads when something was written after the catch-up.
+    def listen
+      @data_version = data_version
+      @total_changes = @db.total_changes
+    end
 
     def unlisten; end
 
+    # Sleeps a poll interval at a time until one of two signals moved, and
+    # neither alone is enough:
+    #
+    # - PRAGMA data_version changes when *another* connection commits to the
+    #   database, and never for this connection's own commits. It covers the
+    #   normal setup, where the subscriber holds its own connection.
+    # - SQLite3::Database#total_changes counts the rows this connection wrote,
+    #   and sees nothing of other connections' writes. It covers a store that
+    #   appends and subscribes over one connection.
+    #
+    # Both readings are refreshed on every return, so the next wait compares
+    # against what this wake-up saw. Only the wake-up is approximate: what is
+    # actually delivered comes from the subscribe loop's read, so a wake-up
+    # for an unrelated write just reads nothing.
     def wait_for_append
-      sleep @poll_interval
+      loop do
+        sleep @poll_interval
+        version = data_version
+        changes = @db.total_changes
+        next if version == @data_version && changes == @total_changes
+
+        @data_version = version
+        @total_changes = changes
+        break
+      end
+    end
+
+    def data_version
+      @db.get_first_value("PRAGMA data_version")
     end
 
     # Statements with RETURNING must be fully consumed before the COMMIT, or

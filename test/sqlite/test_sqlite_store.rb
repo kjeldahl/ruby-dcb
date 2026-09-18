@@ -83,6 +83,83 @@ class TestSqliteStore < Minitest::Test
     assert_equal [["t:1", 1]], rows
   end
 
+  # --- JSON encoding edge cases ---
+  #
+  # Tags and type lists travel as JSON arrays and are expanded with json_each,
+  # so a tag made of JSON metacharacters must survive the round trip and still
+  # match a containment query. (Quotes, commas, braces, backslashes, Unicode
+  # and empty strings are covered for every backend by
+  # SpecialCharactersContract; pagination across the read batch boundary by
+  # StoreContract.)
+  JSON_TAGS = ['["json"]', "[", "]", "{\"a\": 1}", '\\"', "北京🎉"].freeze
+
+  def test_tags_made_of_json_metacharacters_round_trip
+    @store.append([DcbEventStore::Event.new(type: "A", tags: JSON_TAGS)])
+
+    assert_equal JSON_TAGS, @store.read(DcbEventStore::Query.all).first.tags
+  end
+
+  def test_containment_query_matches_a_tag_made_of_json_metacharacters
+    @store.append([DcbEventStore::Event.new(type: "A", tags: JSON_TAGS)])
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["plain"])])
+
+    JSON_TAGS.each do |tag|
+      events = @store.read(DcbEventStore::Query.new([
+                                                      DcbEventStore::QueryItem.new(event_types: [], tags: [tag])
+                                                    ])).to_a
+
+      assert_equal 1, events.size, "expected only the JSON-tagged event to match #{tag.inspect}"
+      assert_equal JSON_TAGS, events[0].tags
+    end
+  end
+
+  # An event type that would need quoting in the JSON list the types filter is
+  # bound as.
+  def test_type_made_of_json_metacharacters_is_matched
+    @store.append([DcbEventStore::Event.new(type: '["A"]')])
+    @store.append([DcbEventStore::Event.new(type: "A")])
+
+    events = @store.read(DcbEventStore::Query.new([
+                                                    DcbEventStore::QueryItem.new(event_types: ['["A"]'])
+                                                  ])).to_a
+
+    assert_equal ['["A"]'], events.map(&:type)
+  end
+
+  # Two events with one id inside a single append: the first insert wins, the
+  # second hits ON CONFLICT DO NOTHING and returns no row, so it must be left
+  # out of the result and must not write tag rows either. The skipped row still
+  # consumes an AUTOINCREMENT value, so positions have a gap -- the same
+  # behavior BIGSERIAL gives on PostgreSQL.
+  def test_duplicate_id_within_one_batch_is_stored_once
+    id = SecureRandom.uuid
+    appended = @store.append([
+                               DcbEventStore::Event.new(type: "A", id: id, tags: ["t:1"]),
+                               DcbEventStore::Event.new(type: "B", id: id, tags: ["t:2"]),
+                               DcbEventStore::Event.new(type: "C", tags: ["t:3"])
+                             ])
+
+    assert_equal %w[A C], appended.map(&:type)
+    assert_equal [1, 3], appended.map(&:sequence_position)
+    assert_equal %w[A C], @store.read(DcbEventStore::Query.all).map(&:type)
+    assert_equal [["t:1", 1], ["t:3", 3]], tag_rows
+  end
+
+  # The tag containment clause matches through the event_tags table, which an
+  # untagged event has no row in; a query without tags must not be narrowed by
+  # that table.
+  def test_type_only_query_matches_an_untagged_event
+    @store.append([DcbEventStore::Event.new(type: "A")])
+    @store.append([DcbEventStore::Event.new(type: "B", tags: ["t:1"])])
+
+    events = @store.read(DcbEventStore::Query.new([
+                                                    DcbEventStore::QueryItem.new(event_types: ["A"])
+                                                  ])).to_a
+
+    assert_equal ["A"], events.map(&:type)
+    assert_empty events[0].tags
+  end
+
   # An exception from inside the transaction must roll it back and leave the
   # connection usable for the next append.
   def test_failed_transaction_is_rolled_back_and_connection_stays_usable
@@ -93,5 +170,12 @@ class TestSqliteStore < Minitest::Test
 
     assert_empty @store.read(DcbEventStore::Query.all).to_a
     assert_equal 1, @store.append([DcbEventStore::Event.new(type: "B")]).size
+  end
+
+  private
+
+  def tag_rows
+    @db.execute("SELECT tag, sequence_position FROM event_tags")
+       .map { |row| [row["tag"], row["sequence_position"]] }.sort
   end
 end

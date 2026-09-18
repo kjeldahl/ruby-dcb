@@ -56,6 +56,66 @@ class TestSqliteSchema < Minitest::Test
     db&.close
   end
 
+  # The configured busy handler is what makes concurrent appends wait for the
+  # database's single write lock: with the lock held elsewhere, an append must
+  # block until it is released rather than fail on the spot.
+  def test_configure_makes_a_connection_wait_for_the_write_lock
+    store = DcbEventStore::SqliteStore.new(SqliteDatabaseHelper.connection(@db_path))
+    @db.execute("BEGIN IMMEDIATE")
+
+    appender = Thread.new { store.append([DcbEventStore::Event.new(type: "A")]) }
+    refute appender.join(0.2), "expected the append to wait for the write lock"
+
+    @db.execute("COMMIT")
+
+    assert appender.join(5), "expected the append to go through once the lock was free"
+    assert_equal 1, @store.read(DcbEventStore::Query.all).to_a.size
+  ensure
+    appender&.kill
+  end
+
+  def test_drop_then_create_starts_from_an_empty_store
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
+
+    DcbEventStore::SqliteStore::Schema.drop!(@db)
+    DcbEventStore::SqliteStore::Schema.create!(@db)
+
+    assert_equal %w[event_tags events], table_names
+    assert_empty @store.read(DcbEventStore::Query.all).to_a
+    assert_empty tag_rows
+    assert_equal 1, @store.append([DcbEventStore::Event.new(type: "B")]).first.sequence_position
+  end
+
+  # An in-memory database belongs to the connection that opened it, so it
+  # cannot be shared -- but a single connection is a perfectly good store, and
+  # the cheapest one for a test suite.
+  def test_works_on_an_in_memory_database
+    db = SQLite3::Database.new(":memory:")
+    DcbEventStore::SqliteStore::Schema.create!(db)
+    store = DcbEventStore::SqliteStore.new(db)
+
+    appended = store.append([DcbEventStore::Event.new(type: "A", data: {n: 1}, tags: ["t:1"])])
+    read_back = store.read(DcbEventStore::Query.all).to_a
+
+    assert_equal [1], appended.map(&:sequence_position)
+    assert_equal ["t:1"], read_back.first.tags
+    assert_equal({n: 1}, read_back.first.data)
+  ensure
+    db&.close
+  end
+
+  # create! configures the connection it installs the schema on, so a store
+  # built on that same connection needs no further setup.
+  def test_create_configures_the_connection
+    db = SQLite3::Database.new(File.join(@dir, "fresh.sqlite3"))
+    DcbEventStore::SqliteStore::Schema.create!(db)
+
+    assert_equal "wal", db.get_first_value("PRAGMA journal_mode")
+    assert db.results_as_hash
+  ensure
+    db&.close
+  end
+
   # --- append-only triggers ---
 
   def test_update_of_an_event_raises

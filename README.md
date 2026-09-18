@@ -148,6 +148,14 @@ end
 
 Uses PostgreSQL `LISTEN/NOTIFY` with catch-up reads.
 
+On SQLite there is no `LISTEN/NOTIFY`, so the same call polls: it sleeps `poll_interval:` (default 0.1s) and only reads again once the database changed.
+
+```ruby
+store = DcbEventStore::SqliteStore.new(db, poll_interval: 0.05)
+```
+
+A subscriber should open its **own `SQLite3::Database` on the same file** (the change check is `PRAGMA data_version`, which only moves for other connections' commits; a store appending and subscribing over one connection is detected too, through that connection's own change counter). A `:memory:` database belongs to the connection that opened it and cannot be subscribed to from another one.
+
 ### Instrumentation (observability)
 
 The gem ships a lightweight notification framework modeled on `ActiveSupport::Notifications`. Store operations, projection folds and decision model builds emit timed events through a process-wide `DcbEventStore::Notifications` instance; adapters subscribe and forward them to monitoring systems. With no subscribers the emission points are near-zero cost.
