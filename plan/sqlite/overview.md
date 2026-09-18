@@ -29,6 +29,15 @@ Verified on SQLite 3.53 / `sqlite3` gem 2.9.6: `INSERT ... ON CONFLICT DO NOTHIN
 - **Naming**: flat like `InMemoryStore`: `PostgresStore`, `SqliteStore`. Shared abstract
   base `SqlStore`. `Store`/`Schema`/`PgArrayCodec` kept as deprecated aliases.
 
+## Confirmed decisions (2026-09-18)
+- `pg`/`sqlite3` both user-supplied (dev deps only in gemspec). Confirmed.
+- Rename `Store` -> `PostgresStore` (+ deprecated alias). Confirmed.
+- Gem `sqlite3`. Confirmed. Min SQLite 3.35. Confirmed.
+- Poll interval default 0.1s. Confirmed.
+- Neutral PG integration tests move to shared contracts (step 3). Confirmed.
+- Examples via `DCB_BACKEND`. Confirmed.
+- Tag storage: pending (see step_08 benchmark).
+
 ## Semantic differences vs PG (document in README)
 | | PostgresStore | SqliteStore |
 |--|--|--|
