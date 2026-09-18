@@ -148,6 +148,28 @@ class TestRailtie < Minitest::Test
     assert_equal @io.string, visible(@io.string)
   end
 
+  def test_colorize_true_wins_over_rails_logging
+    install(build_app(colorize_logging: false, colorize: true))
+    append
+
+    refute_equal @io.string, visible(@io.string)
+  end
+
+  # The default pattern is the gem's own events: with the engine swapped,
+  # an unfiltered subscriber would render every ActiveSupport notification
+  # the application makes -- the whole SQL log, twice.
+  def test_only_dcb_events_are_logged_by_default
+    install(build_app)
+
+    ActiveSupport::Notifications.instrument("sql.active_record", name: "User Load") { nil }
+
+    assert_empty @io.string
+
+    append
+
+    assert_includes visible(@io.string), "DCB Append"
+  end
+
   # What makes any of this automatic: Rails runs the initializer at boot,
   # after :initialize_logger so Rails.logger is the application's own.
   def test_the_railtie_registers_one_initializer_that_installs_the_wiring
