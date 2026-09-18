@@ -36,6 +36,10 @@ bundle exec mutant run                            # mutation testing (all subjec
 bundle exec mutant run 'DcbEventStore::SqlStore#append'  # single method
 ```
 
+## Releasing
+- `DcbEventStore::VERSION` (`lib/dcb_event_store/version.rb`) is the only place a version is written; the gemspec reads it
+- Bumping it on `main` fires `.github/workflows/release.yml`, which tags that commit (bare number, no `v`) and cuts a GitHub release with generated notes. Idempotent, and `workflow_dispatch` tags a version that reached `main` before the workflow existed
+
 ## Examples
 ```sh
 bundle exec ruby examples/course_subscriptions.rb              # postgres (default)
