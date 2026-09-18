@@ -23,6 +23,3 @@ module PostgresDatabaseHelper
     DcbEventStore::PostgresStore.new(@conn, upcaster: upcaster)
   end
 end
-
-# Transitional alias; removed once every backend has its own helper.
-DatabaseHelper = PostgresDatabaseHelper

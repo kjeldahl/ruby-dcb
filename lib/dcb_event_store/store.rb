@@ -13,4 +13,12 @@ module DcbEventStore
   # The PG array codec likewise moved under PostgresStore when the dialects
   # were split out; the old top-level name stays as an alias.
   PgArrayCodec = PostgresStore::ArrayCodec
+
+  # Referencing any of the three prints "constant DcbEventStore::Store is
+  # deprecated". A constant cannot carry a reader hook, so the warning comes
+  # from Ruby itself, which means it obeys the deprecation category: it shows
+  # up under `ruby -w`, `-W:deprecated` or `Warning[:deprecated] = true` and
+  # stays quiet otherwise, rather than writing a line per access in
+  # applications that have not moved over yet.
+  deprecate_constant :Store, :Schema, :PgArrayCodec
 end

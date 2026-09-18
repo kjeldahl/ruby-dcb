@@ -104,3 +104,38 @@ insert_casts                # "::uuid, ::jsonb, ..." | none
 | 9 | Examples backend switch, README/CLAUDE.md, CI, mutant subjects | docs/infra |
 
 Each step: `bundle exec rake` + `rubocop` green, one commit.
+
+## Status
+| # | Step | Status |
+|--|--|--|
+| 1 | `SqlStore` base, `Store` -> `PostgresStore` | done, 51de433 |
+| 2 | Dialect extraction | done, 32df965 |
+| 3 | Test infra + shared contracts | done, 87f81b3 |
+| 4 | `sqlite3` dep, `SqliteStore::Schema` | done, 7268b65 (with step 5) |
+| 5 | `SqliteStore::Dialect` + read/append | done, 7268b65 |
+| 6 | Subscribe loop + SQLite polling | done, 890e728 (with step 7) |
+| 7 | SQLite concurrency/pagination/trigger/subscribe tests | done, 890e728 |
+| 8 | Benchmark record | done, 2758f19 |
+| 9 | Examples, docs, CI, mutant | done, 2758f19 (examples) + the docs commit after it |
+
+## Deviations from the plan
+- PostgreSQL keeps its single-statement CTE append (`append_with_condition`
+  override); only SQLite uses the base check-then-insert (step 1).
+- SQLite waits with `SQLite3::Database#busy_handler_timeout=`, not SQLite's own
+  `busy_timeout` pragma: the C handler sleeps holding the GVL, which starves
+  the thread that must commit (step 4).
+- `wait_for_append` compares `PRAGMA data_version` *and* the connection's
+  `total_changes`; data_version alone never moves for a store that appends and
+  subscribes over one connection (step 6).
+- `SqliteStore*` is not a mutant subject: measured 98.34% (9 of 543 alive), all
+  equivalent edits. Reasoning recorded in `.mutant.yml` (steps 7, 9).
+- Step 3 deleted `test/integration/test_store_append.rb`, `test_read_from.rb`,
+  `test_special_char_tags.rb` and `test/edge_cases/test_special_characters.rb`
+  instead of rewriting them: their cases moved into the contracts under
+  `test/support/`, which every backend now runs.
+- `examples/performance.rb` runs on the two SQL backends and refuses
+  `DCB_BACKEND=memory` (whole-log scans per read, no cross-process sharing)
+  rather than running `DCB_BACKEND=all` in one process (step 9).
+- The deprecated aliases warn through `Module#deprecate_constant`, so the
+  warning is Ruby's and appears per reference when the deprecation category is
+  enabled, instead of a hand-rolled once-per-process `Kernel#warn` (step 9).

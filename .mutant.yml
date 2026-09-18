@@ -18,6 +18,7 @@ requires:
   - ./test/unit/test_postgres_array_codec
   - ./test/unit/test_postgres_dialect
   - ./test/unit/test_sql_builder
+  - ./test/unit/test_row_mapper
   - ./test/unit/test_sql_store
   - ./test/unit/test_sqlite_dialect
   - ./test/unit/test_lock_keys
@@ -60,23 +61,28 @@ matcher:
     - DcbEventStore::SqliteStore::Dialect*
     - DcbEventStore::PostgresStore::ArrayCodec*
     - DcbEventStore::PostgresStore::LockKeys*
-# PostgresStore, SqlStore and the RowMapper are left out on purpose: what
-# remains is thin PG glue (transactions, exec_params, LISTEN/NOTIFY), the
-# read/append/subscribe orchestration over those hooks, and row mapping over
-# trusted SELECT * rows. Their mutations are dominated by equivalent edits --
-# SQL-string tweaks, row["x"] -> row.fetch("x"), .to_i -> Integer(...) -- that
-# only differ on inputs Postgres never produces, so pinning them would mean
-# contrived, out-of-contract tests. All are covered by unit and integration
-# tests; the genuinely branching logic now lives in the pure subjects above.
-# (Measured for reference: SqlStore's own methods kill ~87% -- the survivors
-# are hook-call and loop-shape equivalents in append/read/subscribe.)
-# SqliteStore's own methods are left out for the same reason (measured with
-# the subscribe and concurrency tests in place: 98.34%, 9 of 543 mutations
-# alive). The polling hooks (#listen, #wait_for_append) are fully covered; what
-# survives are equivalent edits only: .to_i on a value SQLite already types as
-# Integer (3), row["x"] -> row.fetch("x") (1), dropping the rescue that
-# swallows a failing ROLLBACK (1), and removing "PRAGMA synchronous=NORMAL"
-# (4), which this SQLite build already defaults to for a WAL database.
+# The four store subjects below are left out on purpose: what remains in them
+# is thin driver glue (transactions, exec_params, LISTEN/NOTIFY, BEGIN
+# IMMEDIATE), the read/append/subscribe orchestration over those hooks, and
+# row mapping over trusted SELECT * rows. Their mutations are dominated by
+# equivalent edits -- SQL-string tweaks, row["x"] -> row.fetch("x"), .to_i ->
+# Integer(...) -- that only differ on inputs the databases never produce, so
+# pinning them would mean contrived, out-of-contract tests. All four are
+# covered by unit, integration and SQLite tests; the genuinely branching
+# logic lives in the pure subjects above. Measured for reference:
+#
+# - SqlStore*: ~87%. Survivors are hook-call and loop-shape equivalents in
+#   append/read/subscribe.
+# - SqliteStore*: 98.34%, 9 of 543 alive (with the subscribe and concurrency
+#   tests in place). The polling hooks (#listen, #wait_for_append) are fully
+#   covered; what survives are .to_i on a value SQLite already types as
+#   Integer (3), row["x"] -> row.fetch("x") (1), dropping the rescue that
+#   swallows a failing ROLLBACK (1), and removing "PRAGMA synchronous=NORMAL"
+#   (4), which this SQLite build already defaults to for a WAL database.
+# - SqlStore::RowMapper*: 95.27%, 12 of 254 alive with test_row_mapper -- all
+#   row.fetch / is_a? -> instance_of? equivalents on driver-supplied rows.
+# - PostgresStore*: not measured; every mutation needs a live server, and its
+#   remaining methods are the exec_params and advisory-lock glue above.
 #    - DcbEventStore::PostgresStore*
 #    - DcbEventStore::SqliteStore*
 #    - DcbEventStore::SqlStore*
