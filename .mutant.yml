@@ -19,6 +19,7 @@ requires:
   - ./test/unit/test_active_support_instrumentation
   - ./test/unit/test_log_subscriber
   - ./test/unit/test_rails_log_subscriber
+  - ./test/unit/test_railtie
   - ./test/unit/test_appsignal_subscriber
   - ./test/unit/test_instrumentation
   - ./test/unit/test_postgres_array_codec
@@ -56,6 +57,7 @@ matcher:
     - DcbEventStore::ActiveSupportInstrumentation*
     - DcbEventStore::LogSubscriber*
     - DcbEventStore::RailsLogSubscriber*
+    - DcbEventStore::Railtie*
     - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
     # Pure collaborators extracted from the stores: SQL building, the PG

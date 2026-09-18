@@ -273,19 +273,48 @@ It reuses the same ANSI color codes `ActiveSupport::LogSubscriber` uses (label i
 DcbEventStore::RailsLogSubscriber.new(colorize: false, pattern: "append.dcb").attach_to
 ```
 
-#### Rails setup: ActiveSupport::Notifications and the Rails logger
+#### Rails setup: nothing to do
 
-For full Rails integration, swap the instrumentation engine for `DcbEventStore::ActiveSupportInstrumentation` — a drop-in replacement (verified by a shared engine contract) that routes every `*.dcb` event through `ActiveSupport::Notifications`. Anything that consumes AS::N — APM agents (AppSignal, Skylight, Datadog), lograge, your own subscribers — then sees event-store activity natively, correctly nested inside the surrounding request/job spans:
+In a Rails application the gem's railtie does both halves at boot, so store operations are logged out of the box — no initializer:
+
+1. the engine is swapped for `DcbEventStore::ActiveSupportInstrumentation` (below), so every `*.dcb` event flows through `ActiveSupport::Notifications`, where APM agents (AppSignal, Skylight, Datadog), lograge and your own subscribers already look — correctly nested inside the surrounding request/job span;
+2. `RailsLogSubscriber` is attached to `Rails.logger`, rendering them in the query log at `debug` (on in development and test, quiet in production until `RAILS_LOG_LEVEL=debug`), honouring `config.colorize_logging`.
+
+```
+  DCB Append (1.4ms)  store=DcbEventStore::SqliteStore event_count=1 event_types=[Deposited] condition=false appended_count=1 last_position=7
+  DCB Read (0.4ms)  store=DcbEventStore::SqliteStore query=Query[Deposited,Withdrawn{wallet:w1}] event_count=7
+```
+
+Both halves are configurable, from `config/application.rb` or an environment file:
 
 ```ruby
-# config/initializers/dcb_event_store.rb
+config.dcb_event_store.log = false            # attach no log subscriber
+config.dcb_event_store.logger = MyLogger.new  # default: Rails.logger
+config.dcb_event_store.pattern = "append.dcb" # default: every *.dcb event
+config.dcb_event_store.colorize = false       # default: config.colorize_logging
 
+# Keep the gem's own engine — e.g. to assign a custom one yourself
+config.dcb_event_store.instrumentation = :standalone
+```
+
+After boot the attached adapter and its subscription handle are on the same options object, so the logger can be detached later:
+
+```ruby
+options = Rails.application.config.dcb_event_store
+DcbEventStore.instrumentation.unsubscribe(options.log_subscription)
+```
+
+Outside Rails — or with `:standalone` — the same wiring is two lines:
+
+```ruby
 # Route all dcb events through ActiveSupport::Notifications
 DcbEventStore.instrumentation = DcbEventStore::ActiveSupportInstrumentation.new
 
 # Render them in the query log via the Rails logger
 DcbEventStore::RailsLogSubscriber.new.attach_to
 ```
+
+`ActiveSupportInstrumentation` is a drop-in replacement for the gem's own engine, verified by a shared engine contract.
 
 With the engine swapped, both subscription styles work and can be mixed freely:
 

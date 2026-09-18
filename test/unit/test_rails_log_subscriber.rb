@@ -164,11 +164,25 @@ class TestRailsLogSubscriber < Minitest::Test
 
   # --- default logger (Rails detection) ---
 
+  # Swaps ::Rails for the double and puts back whatever was there -- the
+  # railtie test loads the real Rails into the same process, so neither
+  # helper may leave the constant in a state that depends on file order.
   def with_rails(rails)
+    previous = Object.const_get(:Rails) if Object.const_defined?(:Rails)
+    Object.send(:remove_const, :Rails) if previous
     Object.const_set(:Rails, rails)
     yield
   ensure
     Object.send(:remove_const, :Rails)
+    Object.const_set(:Rails, previous) if previous
+  end
+
+  def without_rails
+    previous = Object.const_get(:Rails) if Object.const_defined?(:Rails)
+    Object.send(:remove_const, :Rails) if previous
+    yield
+  ensure
+    Object.const_set(:Rails, previous) if previous
   end
 
   def test_defaults_to_rails_logger_when_available
@@ -202,9 +216,11 @@ class TestRailsLogSubscriber < Minitest::Test
   end
 
   def test_falls_back_to_stdout_when_rails_is_absent
-    refute defined?(Rails), "expected no Rails constant in this test environment"
+    out = without_rails do
+      refute defined?(Rails), "expected no Rails constant for this example"
 
-    out = capture_stdout { DcbEventStore::RailsLogSubscriber.new.call(build_event) }
+      capture_stdout { DcbEventStore::RailsLogSubscriber.new.call(build_event) }
+    end
 
     assert_includes out, "DCB Append"
   end
