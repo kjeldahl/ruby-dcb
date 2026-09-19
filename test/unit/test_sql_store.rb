@@ -11,9 +11,10 @@ require "time"
 class TestSqlStore < Minitest::Test
   cover "DcbEventStore::SqlStore*"
 
-  # Dialect for the fake rows: the RowMapper only needs the tag list decoder.
-  # The real backends encode tags in their own dialect (a PG array literal for
-  # PostgreSQL), which SqlStore knows nothing about, so the fake uses JSON.
+  # Dialect for the fake rows: the RowMapper needs the tag list and timestamp
+  # decoders. The real backends encode both in their own dialect (a PG array
+  # literal and a driver-built Time for PostgreSQL), which SqlStore knows
+  # nothing about, so the fake uses JSON and ISO 8601 text.
   module JsonDialect
     def self.encode_list(tags)
       JSON.generate(tags)
@@ -21,6 +22,10 @@ class TestSqlStore < Minitest::Test
 
     def self.decode_list(text)
       JSON.parse(text)
+    end
+
+    def self.decode_timestamp(value)
+      DcbEventStore::SqlStore::Timestamp.parse(value)
     end
   end
 

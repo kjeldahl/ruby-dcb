@@ -1,4 +1,5 @@
 require "json"
+require_relative "../sql_store/timestamp"
 
 module DcbEventStore
   class SqliteStore
@@ -14,6 +15,9 @@ module DcbEventStore
     #
     # Pure: no connection, no I/O.
     class Dialect
+      # Resolution the created_at column is stored in.
+      MICROSECONDS_PER_SECOND = 1_000_000
+
       # Bind parameters are positional in SQLite, so a placeholder is the same
       # "?" wherever it appears; the index the interface passes is unused.
       def placeholder(_index)
@@ -87,6 +91,23 @@ module DcbEventStore
         return [] if str.nil?
 
         JSON.parse(str)
+      end
+
+      # The created_at cell, in the three shapes it reaches us as: the epoch
+      # microseconds the schema's default stores, which SQLite hands straight
+      # back as an Integer and which cost no parsing at all; the ISO 8601 text
+      # a database created before the column became INTEGER still returns; and
+      # a Time, from a connection carrying a type translator of its own.
+      #
+      # Time.at's second argument is microseconds, and Ruby's floor division
+      # borrows a whole second for timestamps before the epoch, so the split
+      # holds on either side of 1970.
+      def decode_timestamp(value)
+        case value
+        when Integer then Time.at(value / MICROSECONDS_PER_SECOND, value % MICROSECONDS_PER_SECOND).utc
+        when Time then value
+        else SqlStore::Timestamp.parse(value)
+        end
       end
     end
   end

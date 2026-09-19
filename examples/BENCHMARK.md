@@ -165,3 +165,52 @@ write transaction — a throughput ceiling of roughly 20 appends/sec at 1M event
 of one type. B is O(matches), at the price of one index row per tag per event;
 PostgreSQL pays the same cost in GIN maintenance. Hence the second table in the
 SQLite schema.
+
+## Row decode: what a replay actually spends
+
+`examples/decode_performance.rb`, 50k events, best of 5. Replay here is a full
+`store.read` over the stream — query, driver, and turning every row back into a
+`SequencedEvent`. Once the query is indexed, decoding is what is left.
+
+`created_at` is the only timestamp the gem parses (payload timestamps sit inside
+the JSON `data` column and are never touched), once per row. It used to go
+through `Time.parse`, which cost more than all the other columns put together.
+
+| replay | before | with `SqlStore::Timestamp` | + driver-native `created_at` |
+|--------|--------|------------------------|--------------------------|
+| PostgreSQL | 17.98 us/event | 9.57 | **6.41** |
+| SQLite | 17.57 us/event | 8.69 | **5.95** |
+
+Where the remaining microseconds go, per row:
+
+| step | PostgreSQL | SQLite |
+|------|-----------|--------|
+| whole row -> `SequencedEvent` | 2.75 us | 2.72 us |
+| JSON payload | 0.93 us | 0.76 us |
+| tags | 0.38 us | 0.40 us |
+| `Integer()` casts | 0.19 us | 0.11 us |
+| **timestamp** | **0.09 us** | **0.29 us** |
+
+The timestamp column, by the route it takes:
+
+| route | PostgreSQL | SQLite |
+|-------|-----------|--------|
+| driver hands back a decoded value | 0.08 us | 0.27 us |
+| `SqlStore::Timestamp` reads the text | 2.60 us | 1.75 us |
+| `Time.parse` reads the text | 10.52 us | 10.30 us |
+
+Three ways to read one column, two orders of magnitude apart:
+
+- **Driver-native.** PostgreSQL decodes `TIMESTAMPTZ` in C, through the type map
+  `PostgresStore` installs on its connection. SQLite has no date type, so
+  `created_at` is `INTEGER` epoch microseconds, which comes back as an Integer
+  needing no parsing. Resolution is unchanged — SQLite's clock is
+  millisecond-grained either way.
+- **`SqlStore::Timestamp`.** Both backends emit one fixed shape, so it validates
+  with a single anchored match and then reads digits out of known byte offsets.
+  This is the fallback for text: a database written before `created_at` became
+  `INTEGER`, a column typed `TIMESTAMP` rather than `TIMESTAMPTZ`, a replaced
+  type map.
+- **`Time.parse`.** Correct for anything, and the cost of that generality is
+  trying dozens of formats before recognising either of ours. Still the fallback
+  for a timestamp outside the recognised shape, so nothing stops being readable.

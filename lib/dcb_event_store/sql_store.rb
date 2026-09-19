@@ -164,8 +164,9 @@ module DcbEventStore
   end
 end
 
-# Loaded after the class body on purpose: both files reopen `class SqlStore`,
+# Loaded after the class body on purpose: these files reopen `class SqlStore`,
 # which while this file is itself being autoloaded would re-enter the autoload
 # rather than reopen the class defined above.
 require_relative "sql_store/sql_builder"
 require_relative "sql_store/row_mapper"
+require_relative "sql_store/timestamp"

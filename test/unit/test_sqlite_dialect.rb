@@ -138,4 +138,51 @@ class TestSqliteDialect < Minitest::Test
     assert_equal %w[a b], @dialect.decode_list('["a","b"]')
     assert_equal ["a,b"], @dialect.decode_list('["a,b"]')
   end
+
+  # --- decode_timestamp ---
+
+  def test_decode_timestamp_reads_epoch_microseconds
+    # What the created_at default stores, and what SQLite hands straight
+    # back: no parsing involved.
+    decoded = @dialect.decode_timestamp(1_780_000_000_123_456)
+
+    assert_equal Time.utc(2026, 5, 28, 20, 26, 40, 123_456), decoded
+    assert_predicate decoded, :utc?
+    assert_equal 123_456, decoded.usec
+  end
+
+  def test_decode_timestamp_keeps_sub_second_precision
+    assert_equal 1, @dialect.decode_timestamp(1_780_000_000_000_001).usec
+    assert_equal 0, @dialect.decode_timestamp(1_780_000_000_000_000).usec
+    assert_equal 999_999, @dialect.decode_timestamp(1_780_000_000_999_999).usec
+  end
+
+  def test_decode_timestamp_reads_the_epoch_itself
+    assert_equal Time.utc(1970, 1, 1), @dialect.decode_timestamp(0)
+  end
+
+  def test_decode_timestamp_reads_times_before_the_epoch
+    # Negative microseconds have to borrow a whole second, which Ruby's
+    # floor division does for us.
+    decoded = @dialect.decode_timestamp(-1_500_000)
+
+    assert_equal Time.utc(1969, 12, 31, 23, 59, 58, 500_000), decoded
+    assert_equal 500_000, decoded.usec
+  end
+
+  def test_decode_timestamp_passes_through_a_time
+    # A connection with a type translator of its own may build the Time
+    # before the dialect sees the cell.
+    time = Time.utc(2026, 6, 13, 22, 0, 0)
+
+    assert_same time, @dialect.decode_timestamp(time)
+  end
+
+  def test_decode_timestamp_still_reads_text_from_an_older_database
+    # Databases created before created_at became INTEGER hold ISO 8601 text.
+    decoded = @dialect.decode_timestamp("2026-06-13T22:00:00.123Z")
+
+    assert_equal Time.utc(2026, 6, 13, 22, 0, 0, 123_000), decoded
+    assert_predicate decoded, :utc?
+  end
 end
