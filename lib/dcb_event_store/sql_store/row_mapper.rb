@@ -1,5 +1,5 @@
 require "json"
-require "time"
+require_relative "timestamp"
 
 module DcbEventStore
   class SqlStore
@@ -62,7 +62,7 @@ module DcbEventStore
       def timestamp(value)
         return value if value.is_a?(Time)
 
-        Time.parse(value)
+        Timestamp.parse(value)
       end
     end
   end

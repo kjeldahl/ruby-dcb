@@ -10,7 +10,7 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with Postgr
 
 ## Project structure
 - `lib/dcb_event_store/` - core classes
-- `lib/dcb_event_store/sql_store/` - collaborators shared by SQL backends (`SqlBuilder`, `RowMapper`)
+- `lib/dcb_event_store/sql_store/` - collaborators shared by SQL backends (`SqlBuilder`, `RowMapper`, `Timestamp`)
 - `lib/dcb_event_store/postgres_store/` - PG-only collaborators (`Schema`, `Dialect`, `ArrayCodec`, `LockKeys`)
 - `lib/dcb_event_store/sqlite_store/` - SQLite-only collaborators (`Schema`, `Dialect`)
 - `test/unit/` - unit tests
@@ -56,6 +56,7 @@ DCB_BACKEND=sqlite bundle exec ruby examples/performance.rb 20000 100  # benchma
 - `PostgresStore` - low-level PG operations (advisory locks, single-statement conditional append via CTE, LISTEN/NOTIFY). Was named `Store`; `store.rb` keeps `Store`, `Schema` and `PgArrayCodec` as aliases marked with `deprecate_constant` (covered by `test/unit/test_deprecated_aliases.rb`)
 - `SqliteStore` - low-level SQLite operations: appends run in `BEGIN IMMEDIATE` (single writer database-wide, so the consistency check needs no extra locking), tags are indexed in a separate `event_tags(tag, sequence_position)` table standing in for PG's GIN index, and `subscribe` polls instead of using LISTEN/NOTIFY: `wait_for_append` sleeps `poll_interval:` (default 0.1s) until either `PRAGMA data_version` moved (another connection committed) or the connection's own `total_changes` moved (a store that appends and subscribes over one connection), then the shared loop reads from the last delivered position. A subscriber normally holds its own connection on the same file; `:memory:` cannot be shared. `Schema.configure!` sets WAL and a GVL-releasing busy handler (`busy_handler_timeout=`), without which a thread waiting for the write lock would starve the thread holding it
 - Backend classes (`SqlStore`, `PostgresStore`, `SqliteStore`, the deprecated `Store` aliases) are `autoload`ed from `lib/dcb_event_store.rb` and load on first reference, each backend file requiring its own collaborators; `InMemoryStore` and the rest stay eager. Mutant needs them loaded to see them as subjects, hence the extra `requires` in `.mutant.yml`
+- `SqlStore::Timestamp` - parses the `created_at` text both backends emit (`2026-06-13 22:00:00.123456+00`, `2026-06-13T22:00:00.123Z`) by reading digits out of fixed positions, ~4-6x cheaper than `Time.parse`, which dominated row decoding; anything outside that shape falls back to `Time.parse`, and the Times returned match it exactly (UTC for `Z`, a fixed offset otherwise)
 - `<Backend>Store::Dialect` - per-backend SQL details injected into `SqlBuilder`/`RowMapper` (placeholders, type/tag matching, insert casts, tag list encoding); `PostgresStore::Dialect` encodes lists through `PostgresStore::ArrayCodec` (was `PgArrayCodec`, kept as an alias)
 - `InMemoryStore` - single-threaded drop-in for either SQL store, for fast tests without a database (runs the same shared contracts: `test/support/*_contract.rb`); reads scan the whole log and `subscribe` never blocks
 - `Client` - high-level API (append, read, subscribe)
