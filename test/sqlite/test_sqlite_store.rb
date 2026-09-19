@@ -6,6 +6,7 @@ require_relative "../support/client_contract"
 require_relative "../support/decision_model_contract"
 require_relative "../support/upcaster_contract"
 require_relative "../support/in_memory_equivalence_contract"
+require_relative "../support/snapshot_decision_model_contract"
 
 # Runs the shared backend contracts against SqliteStore, the same ones
 # PostgresStore (test/integration/) and InMemoryStore (test/unit/) run, plus
@@ -21,6 +22,7 @@ class TestSqliteStore < Minitest::Test
   include DecisionModelContract
   include UpcasterContract
   include InMemoryEquivalenceContract
+  include SnapshotDecisionModelContract
 
   def setup
     setup_db
@@ -28,6 +30,13 @@ class TestSqliteStore < Minitest::Test
 
   def teardown
     teardown_db
+  end
+
+  # For SnapshotDecisionModelContract: the snapshot table lives in the same
+  # throwaway database file as the events.
+  def build_snapshot_store
+    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.create!(@db)
+    DcbEventStore::Snapshots::SqliteSnapshotStore.new(@db)
   end
 
   def test_constructs_with_only_a_connection
