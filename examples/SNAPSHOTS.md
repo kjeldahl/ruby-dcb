@@ -37,9 +37,13 @@ a course with N subscriptions, in a table of ~100k events (median of 20):
 | 10,000 | 93.4 ms | 218.8 ms | 2.0 ms | 381.6 ms | 4.6 ms (0.08 ms after the fix below) | 4.5 ms |
 
 - **Row mapping dominates** from a few hundred events on: 55–68% of a build.
-  Of the ~17µs per row, ~11µs is `Time.parse` of `created_at` (`JSON.parse`
-  of data and tags is ~1µs each). `Time.iso8601`/`Time.strptime` are 2–3x
-  faster; a cheaper timestamp decode is a separate, easy win for every read.
+  Of the ~17µs per row, ~11µs was `Time.parse` of `created_at` (`JSON.parse`
+  of data and tags is ~1µs each). That went into its own change (#41,
+  `SqlStore::Timestamp`: decoding without parsing, ~3x faster replay), which
+  landed on `main` before this branch; the profile and the "baseline" columns
+  in §3 were measured before it, so replay is cheaper today than shown, and
+  the snapshot numbers are unchanged (they never decode a replay). §3.2 has
+  the same benchmark re-run on top of it.
 - **The fold is free** (<1%). Snapshots do not exist to save folding; they
   exist to avoid reading and decoding.
 - **An empty catch-up read is flat** on PostgreSQL. On SQLite it grew with the
@@ -244,10 +248,10 @@ catch-up read").
   sense for a workload that folds the same long streams from one process
   and cannot name its projections — nothing in this gem's examples looks
   like that. Dropped; the numbers stay here as the reason.
-- The cheaper win that needs no new concept: row decoding is 55–68% of a
-  replay and `Time.parse` is two thirds of that; `Time.iso8601` /
-  `Time.strptime` would take ~35% off every read on both backends. Worth
-  doing regardless of snapshots.
+- The cheaper win that needed no new concept — row decoding was 55–68% of a
+  replay and `Time.parse` two thirds of that — shipped separately (#41).
+  Snapshots still win by two orders of magnitude on long streams because
+  they skip the read altogether (§3.2).
 - What snapshots cost in operations: a `Snapshot` (name, version) per
   projection that wants one, a version bump discipline when handlers change,
   and on PostgreSQL an `autovacuum_analyze_scale_factor` low enough that
@@ -268,7 +272,8 @@ counts, and the corresponding AppSignal metrics (`dcb.decision_model.events`,
 - Stores expose `last_position`; a snapshotted build guards up to the log
   head and rewrites snapshots once the head is `every` positions past them,
   so an idle entity's catch-up read no longer grows with the log.
-- The `Time.parse` swap in row decoding is a separate change.
+- The `Time.parse` swap in row decoding shipped separately (#41); this branch
+  is rebased on it.
 - The `autovacuum_analyze_scale_factor` advice stays here (§3.1), with a
   pointer from the README.
 
