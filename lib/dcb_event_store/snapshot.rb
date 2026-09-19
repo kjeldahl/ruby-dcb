@@ -14,9 +14,14 @@ module DcbEventStore
   # configuration serves every instance of a projection and each entity gets
   # its own snapshot. A fingerprint longer than a SHA-256 hex digest is
   # replaced by that digest, so a key never grows with the query beyond
-  # "name/vN/" plus 64 characters; short ones stay readable. Bump
-  # +version+ whenever the handlers change: the old snapshots are then simply
-  # never read again.
+  # "name/vN/" plus 64 characters; short ones stay readable.
+  #
+  # Nothing can tell that a handler changed, so invalidation is explicit:
+  # +version+ has no default, and bumping it makes the old snapshots
+  # unreachable (a store's #purge removes them). For a change that touches
+  # every projection at once, DcbEventStore::Snapshots.epoch prefixes every
+  # key instead ("<epoch>/name/vN/…"); set it once at boot, e.g. to the
+  # release, and #purge_other_epochs drops what earlier epochs left.
   #
   # +every+ is the write policy: a fresh snapshot is stored once the log head
   # has moved at least that many positions past the last one (1 = whenever
@@ -33,7 +38,7 @@ module DcbEventStore
 
     attr_reader :name, :version, :every
 
-    def initialize(name:, version: 1, every: 1, dump: nil, load: nil)
+    def initialize(name:, version:, every: 1, dump: nil, load: nil)
       raise ArgumentError, "every must be >= 1" unless every >= 1
 
       @name = name.to_s
@@ -46,8 +51,23 @@ module DcbEventStore
     # Longest fingerprint kept verbatim: the length of a SHA-256 hex digest.
     DIGEST_LENGTH = 64
 
+    # "<epoch>/name/vN/" without the epoch part when none is set, or without
+    # the version part when +version+ is nil: what every key of +name+ (at
+    # +version+) starts with, which is what the stores' #purge matches on.
+    def self.key_prefix(name, version)
+      parts = [Snapshots.epoch, name.to_s]
+      parts << "v#{version}" if version
+      "#{parts.compact.join('/')}/"
+    end
+
+    # "<epoch>/": what every key of the current epoch starts with. Nil when
+    # no epoch is set, since then keys carry no epoch part at all.
+    def self.epoch_prefix
+      Snapshots.epoch && "#{Snapshots.epoch}/"
+    end
+
     def key(query)
-      "#{@name}/v#{@version}/#{key_part(query.fingerprint)}"
+      "#{self.class.key_prefix(@name, @version)}#{key_part(query.fingerprint)}"
     end
 
     def key_part(fingerprint)

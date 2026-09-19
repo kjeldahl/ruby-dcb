@@ -47,6 +47,30 @@ module DcbEventStore
         nil
       end
 
+      # Removes the snapshots of projection +name+ in the current epoch, all
+      # versions but +keep_version+ (every version when nil). Prefixes are
+      # compared with substr rather than LIKE (case-insensitive in SQLite),
+      # so a name may contain any character. Returns how many rows were
+      # removed.
+      def purge(name:, keep_version: nil)
+        prefix = Snapshot.key_prefix(name, nil)
+        if keep_version
+          @db.execute("DELETE FROM projection_snapshots WHERE substr(key, 1, length(?1)) = ?1 " \
+                      "AND substr(key, 1, length(?2)) <> ?2", [prefix, Snapshot.key_prefix(name, keep_version)])
+        else
+          @db.execute("DELETE FROM projection_snapshots WHERE substr(key, 1, length(?1)) = ?1", [prefix])
+        end
+        @db.changes
+      end
+
+      # Removes every snapshot not keyed under the current epoch (an epoch
+      # must be set). Returns how many rows were removed.
+      def purge_other_epochs
+        prefix = Snapshot.epoch_prefix or raise ArgumentError, "no epoch is set"
+        @db.execute("DELETE FROM projection_snapshots WHERE substr(key, 1, length(?1)) <> ?1", [prefix])
+        @db.changes
+      end
+
       def clear
         @db.execute("DELETE FROM projection_snapshots")
         nil

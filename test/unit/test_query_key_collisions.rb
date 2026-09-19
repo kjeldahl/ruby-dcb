@@ -36,7 +36,7 @@ class TestQueryKeyCollisions < Minitest::Test
 
   def test_snapshot_keys_do_not_confuse_two_queries_that_render_alike
     snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new
-    config = DcbEventStore::Snapshot.new(name: "count")
+    config = DcbEventStore::Snapshot.new(name: "count", version: 1)
     projection = lambda do |query|
       DcbEventStore::Projection.new(initial_state: 0, handlers: { "E" => ->(s, _e) { s + 1 } },
                                     query: query, snapshot: config)

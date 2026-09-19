@@ -104,7 +104,7 @@ class TestDecisionModelUnit < Minitest::Test
                               DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
     proj = projection(event_types: ["A"], tags: ["t:1"], handlers: { "A" => ->(s, _e) { s + 1 } })
     proj = DcbEventStore::Projection.new(initial_state: 0, handlers: proj.handlers, query: proj.query,
-                                         snapshot: DcbEventStore::Snapshot.new(name: "a"))
+                                         snapshot: DcbEventStore::Snapshot.new(name: "a", version: 1))
 
     result = DcbEventStore::DecisionModel.build(stale, snapshots: DcbEventStore::Snapshots::InMemorySnapshotStore.new,
                                                        p: proj)

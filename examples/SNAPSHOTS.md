@@ -324,3 +324,7 @@ counts, and the corresponding AppSignal metrics (`dcb.decision_model.events`,
 
 - Keys are bounded: a fingerprint longer than a SHA-256 hex digest (64
   characters) is replaced by that digest, so `name/vN/` plus at most 64.
+- Invalidation is explicit and has tools: `version:` is required (no
+  default), `Snapshots.epoch` prefixes every key for a wholesale change, and
+  the stores' `purge(name:, keep_version:)` / `purge_other_epochs` remove
+  what a bump left behind.

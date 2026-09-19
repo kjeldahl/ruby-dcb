@@ -19,7 +19,7 @@ class TestSnapshotInstrumentation < Minitest::Test
     DcbEventStore.instrumentation = @previous_instrumentation
   end
 
-  def counter(tag, snapshot: DcbEventStore::Snapshot.new(name: "counter", every: 2))
+  def counter(tag, snapshot: DcbEventStore::Snapshot.new(name: "counter", version: 1, every: 2))
     DcbEventStore::Projection.new(
       initial_state: 0,
       handlers: { "Inc" => ->(s, _e) { s + 1 } },

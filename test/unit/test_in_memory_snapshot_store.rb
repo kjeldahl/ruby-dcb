@@ -62,11 +62,11 @@ class TestInMemorySnapshotStore < Minitest::Test
   # the store a serialized copy, so the state the projection folded and the
   # state the store holds are separate objects.
   def test_marshal_dump_and_load_isolate_the_stored_state
-    snapshot = DcbEventStore::Snapshot.new(
-      name: "isolated",
-      dump: ->(state) { Marshal.dump(state) },
-      load: ->(dumped) { Marshal.load(dumped) } # rubocop:disable Security/MarshalLoad
-    )
+    snapshot = DcbEventStore::Snapshot.new(name: "isolated", version: 1,
+                                           dump: ->(state) { Marshal.dump(state) },
+                                           load: ->(dumped) {
+                                             Marshal.load(dumped) # rubocop:disable Security/MarshalLoad
+                                           })
 
     state = { n: 1 }
     @snapshots.store("k", position: 1, state: snapshot.dump(state))

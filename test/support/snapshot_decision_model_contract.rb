@@ -132,7 +132,7 @@ module SnapshotDecisionModelContract
 
     DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
 
-    assert_empty snapshots.fetch_many([DcbEventStore::Snapshot.new(name: "a").key(proj.query)])
+    assert_empty snapshots.fetch_many([DcbEventStore::Snapshot.new(name: "a", version: 1).key(proj.query)])
   end
 
   def test_nothing_is_written_on_an_empty_store
@@ -492,11 +492,13 @@ module SnapshotDecisionModelContract
   # --- dump / load ---------------------------------------------------------
 
   def test_dump_and_load_round_trip_a_struct_state
-    config = DcbEventStore::Snapshot.new(
-      name: "balance",
-      dump: ->(state) { { amount: state.amount } },
-      load: ->(hash) { Balance.new(hash.fetch(:amount)) }
-    )
+    config = DcbEventStore::Snapshot.new(name: "balance", version: 1,
+                                         dump: ->(state) {
+                                           { amount: state.amount }
+                                         },
+                                         load: ->(hash) {
+                                           Balance.new(hash.fetch(:amount))
+                                         })
     proj = DcbEventStore::Projection.new(
       initial_state: Balance.new(0),
       handlers: { "Deposited" => ->(s, e) { Balance.new(s.amount + e.data.fetch(:amount)) } },
@@ -520,12 +522,14 @@ module SnapshotDecisionModelContract
   # pair hands the store a serialized copy, so what the store holds is its
   # own object whatever the projection does with its state afterwards.
   def test_marshal_dump_and_load_isolate_a_state_mutated_in_place
-    config = DcbEventStore::Snapshot.new(
-      name: "mutating",
-      # Base64 so the dumped state is a plain JSON string for the SQL stores.
-      dump: ->(state) { [Marshal.dump(state)].pack("m0") },
-      load: ->(packed) { Marshal.load(packed.unpack1("m0")) } # rubocop:disable Security/MarshalLoad
-    )
+    config = DcbEventStore::Snapshot.new(name: "mutating", version: 1,
+                                         # Base64 so the dumped state is a plain JSON string for the SQL stores.
+                                         dump: ->(state) {
+                                           [Marshal.dump(state)].pack("m0")
+                                         },
+                                         load: ->(packed) {
+                                           Marshal.load(packed.unpack1("m0")) # rubocop:disable Security/MarshalLoad
+                                         })
     proj = DcbEventStore::Projection.new(
       initial_state: { n: 0 },
       handlers: { "Increment" => ->(state, _e) {

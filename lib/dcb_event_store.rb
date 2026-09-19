@@ -28,6 +28,14 @@ module DcbEventStore
   # Snapshot stores follow the same rule: the in-memory one is driver-free,
   # the SQL ones load with the backend they persist through.
   module Snapshots
+    class << self
+      # Process-wide prefix folded into every snapshot key (nil = none).
+      # Changing it invalidates every snapshot at once: set it at boot, e.g.
+      # to the release identifier, when a deploy changes projections
+      # wholesale; a snapshot store's #purge_other_epochs drops the rest.
+      attr_accessor :epoch
+    end
+
     autoload :InMemorySnapshotStore, File.expand_path("dcb_event_store/snapshots/in_memory_snapshot_store", __dir__)
     autoload :PostgresSnapshotStore, File.expand_path("dcb_event_store/snapshots/postgres_snapshot_store", __dir__)
     autoload :SqliteSnapshotStore,   File.expand_path("dcb_event_store/snapshots/sqlite_snapshot_store", __dir__)

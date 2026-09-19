@@ -39,6 +39,22 @@ module DcbEventStore
         nil
       end
 
+      # Removes the snapshots of projection +name+ in the current epoch, all
+      # versions but +keep_version+ (every version when nil). Returns how
+      # many were removed.
+      def purge(name:, keep_version: nil)
+        prefix = Snapshot.key_prefix(name, nil)
+        keep = keep_version && Snapshot.key_prefix(name, keep_version)
+        delete_where { |key| key.start_with?(prefix) && !(keep && key.start_with?(keep)) }
+      end
+
+      # Removes every snapshot not keyed under the current epoch (an epoch
+      # must be set). Returns how many were removed.
+      def purge_other_epochs
+        prefix = Snapshot.epoch_prefix or raise ArgumentError, "no epoch is set"
+        delete_where { |key| !key.start_with?(prefix) }
+      end
+
       def clear
         @mutex.synchronize { @entries.clear }
         nil
@@ -46,6 +62,16 @@ module DcbEventStore
 
       def size
         @mutex.synchronize { @entries.size }
+      end
+
+      private
+
+      def delete_where
+        @mutex.synchronize do
+          before = @entries.size
+          @entries.delete_if { |key, _entry| yield(key) }
+          before - @entries.size
+        end
       end
     end
   end

@@ -146,7 +146,7 @@ module SnapshotStoreContract
                                                                       "course:c1", "student:s'1"
                                                                     ])
                                      ])
-    key = DcbEventStore::Snapshot.new(name: "café/subs").key(query)
+    key = DcbEventStore::Snapshot.new(name: "café/subs", version: 1).key(query)
 
     @snapshots.store(key, position: 3, state: { ok: true })
 
@@ -169,5 +169,110 @@ module SnapshotStoreContract
     @snapshots.store("k", position: 1, state: { n: 1 })
 
     assert_instance_of DcbEventStore::Snapshot::Entry, @snapshots.fetch("k")
+  end
+
+  # --- purge ---
+
+  def with_epoch(epoch)
+    previous = DcbEventStore::Snapshots.epoch
+    DcbEventStore::Snapshots.epoch = epoch
+    yield
+  ensure
+    DcbEventStore::Snapshots.epoch = previous
+  end
+
+  def purge_key(name, version, tag, epoch: nil)
+    with_epoch(epoch) do
+      DcbEventStore::Snapshot.new(name: name, version: version)
+                             .key(DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["E"],
+                                                                                         tags: [tag])]))
+    end
+  end
+
+  def seed_versions
+    { "count/v1/a" => purge_key("count", 1, "t:a"), "count/v1/b" => purge_key("count", 1, "t:b"),
+      "count/v2/a" => purge_key("count", 2, "t:a"), "count/v10/a" => purge_key("count", 10, "t:a"),
+      "counter/v1/a" => purge_key("counter", 1, "t:a") }.each_value do |key|
+      @snapshots.store(key, position: 1, state: 0)
+    end
+  end
+
+  def remaining(keys)
+    keys.values.select { |key| @snapshots.fetch(key) }.map { |key| keys.key(key) }
+  end
+
+  def test_purge_removes_every_version_of_a_name_and_nothing_else
+    keys = seed_versions
+    with_epoch(nil) do
+      assert_equal 4, @snapshots.purge(name: "count")
+    end
+
+    # "counter" shares the prefix "count" but not the prefix "count/".
+    assert_equal ["counter/v1/a"], remaining(keys)
+  end
+
+  def test_purge_keeps_one_version
+    keys = seed_versions
+    with_epoch(nil) do
+      assert_equal 2, @snapshots.purge(name: "count", keep_version: 1)
+    end
+
+    # v10 must not survive as a prefix match of v1.
+    assert_equal ["count/v1/a", "count/v1/b", "counter/v1/a"], remaining(keys)
+  end
+
+  def test_purge_of_an_unknown_name_removes_nothing
+    keys = seed_versions
+    with_epoch(nil) do
+      assert_equal 0, @snapshots.purge(name: "nothing")
+    end
+
+    assert_equal keys.keys, remaining(keys)
+  end
+
+  def test_purge_stays_within_the_current_epoch
+    old = purge_key("count", 1, "t:a", epoch: "old")
+    current = purge_key("count", 1, "t:a", epoch: "new")
+    @snapshots.store(old, position: 1, state: 0)
+    @snapshots.store(current, position: 1, state: 0)
+
+    with_epoch("new") { assert_equal 1, @snapshots.purge(name: "count") }
+
+    refute_nil @snapshots.fetch(old)
+    assert_nil @snapshots.fetch(current)
+  end
+
+  def test_purge_other_epochs_keeps_only_the_current_one
+    keys = { unversioned: purge_key("count", 1, "t:a"), old: purge_key("count", 1, "t:a", epoch: "old"),
+             current: purge_key("count", 1, "t:a", epoch: "new"), other: purge_key("x", 1, "t:a", epoch: "new") }
+    keys.each_value { |key| @snapshots.store(key, position: 1, state: 0) }
+
+    with_epoch("new") { assert_equal 2, @snapshots.purge_other_epochs }
+
+    assert_nil @snapshots.fetch(keys[:unversioned])
+    assert_nil @snapshots.fetch(keys[:old])
+    refute_nil @snapshots.fetch(keys[:current])
+    refute_nil @snapshots.fetch(keys[:other])
+  end
+
+  def test_purge_other_epochs_needs_an_epoch
+    @snapshots.store("count/v1/x", position: 1, state: 0)
+
+    with_epoch(nil) do
+      error = assert_raises(ArgumentError) { @snapshots.purge_other_epochs }
+      assert_match(/epoch/, error.message)
+    end
+    refute_nil @snapshots.fetch("count/v1/x")
+  end
+
+  # An epoch that happens to read like a prefix of another must not match
+  # it: "rel-1/" is not a prefix of "rel-10/...".
+  def test_purge_other_epochs_matches_the_whole_epoch
+    ten = purge_key("count", 1, "t:a", epoch: "rel-10")
+    @snapshots.store(ten, position: 1, state: 0)
+
+    with_epoch("rel-1") { assert_equal 1, @snapshots.purge_other_epochs }
+
+    assert_nil @snapshots.fetch(ten)
   end
 end
