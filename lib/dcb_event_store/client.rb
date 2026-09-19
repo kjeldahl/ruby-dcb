@@ -17,6 +17,7 @@ module DcbEventStore
 
     def read(query) = @store.read(query)
     def read_from(query, after:) = @store.read_from(query, after: after)
+    def last_position = @store.last_position
 
     def caused_by(event)
       Client.new(

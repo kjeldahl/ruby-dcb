@@ -35,13 +35,16 @@ module SnapshotDecisionModelContract
       @calls << [:read_from, after]
       @store.read_from(query, after: after)
     end
+
+    def last_position = @store.last_position
   end
 
   # --- the invariant -------------------------------------------------------
 
   # A scripted run of interleaved appends and builds: at every step the build
-  # that uses snapshots must agree with the build that does not, in both the
-  # states and the condition's +after+.
+  # that uses snapshots must agree with the build that does not in the states,
+  # and its condition must guard the log head (never less than the plain
+  # build's +after+, which stops at the last matching event).
   def test_states_and_after_identical_with_and_without_snapshots
     projections = {
       a: snap_counter("counter:a", snapshot: snap_config("a")),
@@ -242,6 +245,34 @@ module SnapshotDecisionModelContract
     entry = snapshots.fetch(key)
     assert_equal latest.last.sequence_position, entry.position
     assert_equal 9, entry.state
+  end
+
+  # The head moves past a snapshot through events the projection does not
+  # even select; the snapshot follows anyway (state unchanged, position at
+  # the head), so the next catch-up read starts where the log ends.
+  def test_a_snapshot_follows_the_log_head_past_unrelated_events
+    snap_append("Increment", "counter:a")
+    config = snap_config("a", every: 2)
+    proj = snap_counter("counter:a", snapshot: config)
+    key = config.key(proj.query)
+
+    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
+    first = snapshots.fetch(key).position
+
+    snap_append("Increment", "counter:z")
+    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
+    assert_equal first, snapshots.fetch(key).position, "one unrelated event is below every: 2"
+
+    head = snap_append("Increment", "counter:z").last.sequence_position
+    result = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
+
+    entry = snapshots.fetch(key)
+    assert_equal head, entry.position
+    assert_equal 1, entry.state
+    assert_equal head, result.append_condition.after
+
+    reads = snap_reads { DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj) }
+    assert_equal head, reads[0].payload[:after]
   end
 
   # Two projections over the same events, one snapshotted and one not. The
@@ -565,8 +596,11 @@ module SnapshotDecisionModelContract
     assert_equal plain.states, snapshotted.states, "states diverged once snapshots were used"
     # Wrapped in arrays so an empty store's nil == nil does not trip
     # Minitest's assert_equal-nil deprecation.
-    assert_equal [plain.append_condition.after], [snapshotted.append_condition.after],
-                 "append_condition.after diverged once snapshots were used"
+    assert_equal [@store.last_position], [snapshotted.append_condition.after],
+                 "a snapshotted build must guard up to the log head"
+    if plain.append_condition.after
+      assert_operator plain.append_condition.after, :<=, snapshotted.append_condition.after
+    end
     assert_equal plain.append_condition.fail_if_events_match,
                  snapshotted.append_condition.fail_if_events_match
     snapshotted

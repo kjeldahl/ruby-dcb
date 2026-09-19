@@ -162,15 +162,12 @@ result.states[:subscriptions]  # => 12
 result.append_condition        # use this when appending
 ```
 
-### Snapshots and materialized streams
+### Snapshots
 
-A decision model re-reads and re-folds every matching event on every build, so its cost grows with the length of the projection's history — a "popular course" with 10,000 subscriptions costs ~400ms per decision on either backend, nearly all of it row decoding (see `examples/SNAPSHOTS.md` for the measurements). Two opt-in tools cap that:
-
-**Snapshots** store a projection's folded state at a sequence position, so the next build reads only the events after it. A projection opts in with a `Snapshot`, and `DecisionModel.build` takes the store to keep them in:
+A decision model re-reads and re-folds every matching event on every build, so its cost grows with the length of the projection's history — a "popular course" with 10,000 subscriptions costs ~400ms per decision on either backend, nearly all of it row decoding. Snapshots cap that: a projection's folded state is stored at a sequence position, and the next build reads only the events after it (2–5ms for the same decision; measurements and design notes in `examples/SNAPSHOTS.md`). A projection opts in with a `Snapshot`, and `DecisionModel.build` takes the store to keep them in:
 
 ```ruby
 snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn)   # or SqliteSnapshotStore.new(db)
-DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(conn)  # projection_snapshots table, idempotent
 
 course_subscriptions = DcbEventStore::Projection.new(
   initial_state: 0,
@@ -178,7 +175,7 @@ course_subscriptions = DcbEventStore::Projection.new(
   query: DcbEventStore::Query.new([
     DcbEventStore::QueryItem.new(event_types: ["StudentSubscribedToCourse"], tags: ["course:math-101"])
   ]),
-  snapshot: DcbEventStore::Snapshot.new(name: "course_subscriptions", version: 1, every: 100)
+  snapshot: DcbEventStore::Snapshot.new(name: "course_subscriptions", version: 1, every: 1)
 )
 
 result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
@@ -187,19 +184,15 @@ result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
 )
 ```
 
+- The `projection_snapshots` table is part of the schema `Schema.create!` installs on both backends; nothing extra to set up.
 - The snapshot **key** is `name`, `version` and the projection's query (`Query#fingerprint`, a JSON rendering of its items that carries the entity's tags), so one `Snapshot` configuration serves every instance of a projection and each entity gets its own snapshot. Bump `version` whenever the handlers change; old snapshots are then never read again.
-- `every:` is the write policy: a snapshot is written the first time a projection is built and thereafter once a build had to fold at least `every` events on top of it. It is written at the position of the returned append condition, so the stored state is exactly the state the build returned.
-- `DecisionModel.build` groups projections by snapshot position and issues one read per group (projections without a snapshot read from the start of the log, but only their own query), so a projection over a brand-new entity does not force the others to replay. The append condition is unchanged: it guards the union of all queries after the highest position any state was folded through.
+- A build with snapshots first takes the store's `last_position` (the log head), then reads; its append condition guards up to that head, and snapshots are written there, so the state a snapshot holds is exactly the state the build returned.
+- `every:` is the write policy: a snapshot is written the first time a projection is built and thereafter once the head has moved at least `every` positions past it — whether the events in between matched the projection or not, since the next catch-up read would have to look past them. `every: 1` (one upsert per projection per build that saw any append) keeps the catch-up read shortest and is the right default for decision models.
+- `DecisionModel.build` groups projections by snapshot position and issues one read per group (projections without a snapshot read from the start of the log, but only their own query), so a projection over a brand-new entity does not force the others to replay.
 - State is stored as JSON by the SQL stores, so JSON-compatible states (numbers, strings, booleans, arrays, symbol-keyed hashes) round-trip as they are; anything else takes `dump:`/`load:` lambdas on the `Snapshot`.
 - `Snapshots::InMemorySnapshotStore` keeps the states in the process (a warm cache, lost on restart). It stores the very objects the fold produced, so handlers that mutate their state in place need `dump: Marshal.method(:dump), load: Marshal.method(:load)` or must return new objects.
-
-**Materialized streams** are the alternative that keeps no derived state: `MaterializedStreams` wraps a store and keeps the decoded events of every `QueryItem` it has served in the process, asking the store only for the events after the last one it holds. Reads skip the database and the decoding, but the fold still runs over the whole stream, so the cost stays proportional to its length:
-
-```ruby
-store = DcbEventStore::MaterializedStreams.new(DcbEventStore::SqliteStore.new(db), max_streams: 1_000, max_events: 1_000_000)
-```
-
-Both keep the DCB guarantees only as far as a read does: a snapshot position or a materialized stream's last position means "every matching event up to here was visible when it was read", which holds on SQLite and `InMemoryStore` (single writer, positions commit in order) and on PostgreSQL under the same per-tag locking that already protects the append condition.
+- Snapshots keep the DCB guarantees only as far as a read does: a snapshot position means "every matching event up to here was visible when it was read", which holds on SQLite and `InMemoryStore` (single writer, positions commit in order) and on PostgreSQL under the same per-tag locking that already protects the append condition.
+- On PostgreSQL, keep `autovacuum_analyze_scale_factor` low on the `events` table (e.g. `0.01`): with stale statistics the planner walks the primary key for the catch-up read, and the walk grows with everything appended since the snapshot. `examples/SNAPSHOTS.md` §3.1 has the measurements.
 
 ### Client (causation/correlation wiring)
 
@@ -272,12 +265,11 @@ Emitted events and payloads:
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
 | `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
 | `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
-| `stream.dcb` | `MaterializedStreams#read`/`#read_from` | `store:`, `query:`, `after:`, `streams:` (items), `hits:`, `misses:`, `fetched_count:` (events pulled from the store), `event_count:` (served), `evicted:` |
 | `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
 
-`event_count` on `decision_model.dcb` is the number snapshots exist to hold down: with snapshots working it stays flat as a projection's history grows, and `snapshot.dcb`'s `requested:`/`loaded:` give the hit rate. `stream.dcb`'s `fetched_count:` against `event_count:` shows how much of a materialized stream came from memory; the wrapped store's own `read.dcb` events still fire for what reached the database.
+`event_count` on `decision_model.dcb` is the number snapshots exist to hold down: with snapshots working it stays flat as a projection's history grows, and `snapshot.dcb`'s `requested:`/`loaded:` give the hit rate.
 
 Reads are lazy enumerators, so `read.dcb` fires when the enumeration finishes (completing or exiting early via `break`/`#first`), with `event_count` reflecting the events actually yielded. Whether a read is instrumented is decided when the read is issued, and an abandoned external iterator (`#next` without exhausting) publishes nothing.
 
@@ -404,9 +396,6 @@ DcbEventStore::AppsignalSubscriber.new.attach_to
 | `dcb.snapshot.hits` / `dcb.snapshot.misses` | counter | snapshots found / missing on load (hit rate) |
 | `dcb.snapshot.writes` | counter | snapshots written |
 | `dcb.snapshot.folded` | distribution | events folded on top of a snapshot before it was rewritten (tune `every:`) |
-| `dcb.stream.hits` / `dcb.stream.misses` | counter | materialized streams already held / built from a full read |
-| `dcb.stream.fetched` | counter | events pulled from the store into materialized streams |
-| `dcb.stream.evicted` | counter | streams dropped to stay within `max_streams`/`max_events` |
 
 Metrics are tagged with the emitting store (`store=PostgresStore` / `store=SqliteStore` / `store=InMemoryStore`). The adapter encodes the gem's semantics: delivery lag is recorded **only for the `:live` phase** (catch-up replays history, where large lag is expected and would poison the staleness signal), and comes from `lag:` or `max_lag:` depending on the store's `subscribe_instrumentation:` mode.
 
@@ -457,7 +446,7 @@ All examples from [dcb.events](https://dcb.events/examples) are implemented in `
 | `opt_in_token.rb` | Token verification without separate token store |
 | `prevent_record_duplication.rb` | Idempotency tokens via tags |
 | `performance.rb` | Benchmark: seeding, reads, appends, concurrency |
-| `snapshot_benchmark.rb` | Benchmark: decision models with snapshots and materialized streams vs. replay (`examples/SNAPSHOTS.md`) |
+| `snapshot_benchmark.rb` | Benchmark: decision models with snapshots vs. replay (`examples/SNAPSHOTS.md`) |
 
 Run any example:
 

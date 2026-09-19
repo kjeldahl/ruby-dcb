@@ -15,9 +15,10 @@ module DcbEventStore
   # +version+ whenever the handlers change: the old snapshots are then simply
   # never read again.
   #
-  # +every+ is the write policy: a fresh snapshot is stored once the build had
-  # to fold at least that many events on top of the last one (1 = after every
-  # build that folded anything).
+  # +every+ is the write policy: a fresh snapshot is stored once the log head
+  # has moved at least that many positions past the last one (1 = whenever
+  # anything at all was appended since), so the catch-up read after it never
+  # has to look past more than +every+ events, matching or not.
   #
   # +dump+ / +load+ convert the state to and from the value the snapshot
   # store persists. The default keeps JSON-compatible states (numbers,

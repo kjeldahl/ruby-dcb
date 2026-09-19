@@ -1,12 +1,10 @@
 require_relative "../test_helper"
 
-# The instrumentation events snapshots and materialized streams publish:
-# "snapshot.dcb" from DecisionModel around its snapshot store calls and
-# "stream.dcb" from MaterializedStreams per read. Same fixture as
-# test_instrumentation.rb: a fresh Notifications instance per test.
+# The "snapshot.dcb" events DecisionModel publishes around its snapshot
+# store calls. Same fixture as test_instrumentation.rb: a fresh
+# Notifications instance per test.
 class TestSnapshotInstrumentation < Minitest::Test
   cover "DcbEventStore::DecisionModel*"
-  cover "DcbEventStore::MaterializedStreams*"
 
   def setup
     @events = []
@@ -128,82 +126,5 @@ class TestSnapshotInstrumentation < Minitest::Test
     build(a: counter("t:a"))
 
     assert_equal %i[load stored write], order
-  end
-
-  # --- stream.dcb ---
-
-  def test_read_reports_misses_then_hits_with_fetched_and_served_counts
-    streams = DcbEventStore::MaterializedStreams.new(@store)
-    query = DcbEventStore::Query.new([
-                                       DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:a"]),
-                                       DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:b"])
-                                     ])
-    @store.append([inc("t:a"), inc("t:b"), inc("t:c")])
-
-    streams.read(query).to_a
-    first = named("stream.dcb").first.payload
-    assert_equal "DcbEventStore::MaterializedStreams", first[:store]
-    assert_equal query, first[:query]
-    assert_nil first[:after]
-    assert_equal({ streams: 2, hits: 0, misses: 2, fetched_count: 2, event_count: 2, evicted: 0 },
-                 first.slice(:streams, :hits, :misses, :fetched_count, :event_count, :evicted))
-
-    @store.append([inc("t:a")])
-    streams.read(query).to_a
-    second = named("stream.dcb").last.payload
-    assert_equal({ hits: 2, misses: 0, fetched_count: 1, event_count: 3 },
-                 second.slice(:hits, :misses, :fetched_count, :event_count))
-  end
-
-  def test_read_from_reports_after_and_the_events_actually_served
-    streams = DcbEventStore::MaterializedStreams.new(@store)
-    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:a"])])
-    appended = @store.append([inc("t:a"), inc("t:a"), inc("t:a")])
-
-    served = streams.read_from(query, after: appended[0].sequence_position).to_a
-
-    assert_equal appended[1..].map(&:sequence_position), served.map(&:sequence_position)
-    payload = named("stream.dcb").first.payload
-    assert_equal appended[0].sequence_position, payload[:after]
-    assert_equal({ fetched_count: 3, event_count: 2 }, payload.slice(:fetched_count, :event_count))
-  end
-
-  def test_evictions_are_counted
-    streams = DcbEventStore::MaterializedStreams.new(@store, max_streams: 1)
-    a = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:a"])])
-    b = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:b"])])
-
-    streams.read(a).to_a
-    streams.read(b).to_a
-
-    assert_equal([0, 1], named("stream.dcb").map { |e| e.payload[:evicted] })
-  end
-
-  def test_wrapped_store_reads_still_publish_read_events
-    streams = DcbEventStore::MaterializedStreams.new(@store)
-    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:a"])])
-    @store.append([inc("t:a")])
-
-    streams.read(query).to_a
-    streams.read(query).to_a
-
-    reads = named("read.dcb")
-    assert_equal(["DcbEventStore::InMemoryStore"] * 2, reads.map { |e| e.payload[:store] })
-    assert_equal([nil, 1], reads.map { |e| e.payload[:after] })
-    assert_equal([1, 0], reads.map { |e| e.payload[:event_count] })
-  end
-
-  def test_failing_store_read_publishes_the_error_and_propagates
-    failing = Object.new
-    def failing.read(_query) = raise(IOError, "store down")
-    streams = DcbEventStore::MaterializedStreams.new(failing)
-    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Inc"], tags: ["t:a"])])
-
-    assert_raises(IOError) { streams.read(query) }
-
-    event = named("stream.dcb").first
-    assert_instance_of IOError, event.error
-    refute event.payload.key?(:hits)
-    assert_equal 0, streams.size
   end
 end

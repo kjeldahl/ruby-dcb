@@ -2,25 +2,10 @@ require "json"
 
 module DcbEventStore
   module Snapshots
-    # The SQLite twin of PostgresSnapshotStore: same table, same forward-only
-    # upsert, state as JSON text.
+    # The SQLite twin of PostgresSnapshotStore: same table (installed by
+    # SqliteStore::Schema.create!), same forward-only upsert, state as JSON
+    # text.
     class SqliteSnapshotStore
-      module Schema
-        CREATE_SQL = <<~SQL.freeze
-          CREATE TABLE IF NOT EXISTS projection_snapshots (
-            key        TEXT PRIMARY KEY,
-            position   INTEGER NOT NULL,
-            state      TEXT NOT NULL CHECK (json_valid(state)),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-          );
-        SQL
-
-        DROP_SQL = "DROP TABLE IF EXISTS projection_snapshots;".freeze
-
-        def self.create!(db) = db.execute_batch(CREATE_SQL)
-        def self.drop!(db) = db.execute_batch(DROP_SQL)
-      end
-
       UPSERT_SQL = <<~SQL.freeze
         INSERT INTO projection_snapshots (key, position, state)
         VALUES (?, ?, ?)

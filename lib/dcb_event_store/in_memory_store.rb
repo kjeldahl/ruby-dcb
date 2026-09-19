@@ -28,6 +28,11 @@ module DcbEventStore
       instrument_read(each_matching(query, after: after), query, after)
     end
 
+    # The sequence position of the last stored event, nil on an empty store.
+    def last_position
+      @rows.last&.fetch(:sequence_position)
+    end
+
     def append(events, condition = nil)
       events = Array(events)
       instrument_append(events, condition) do

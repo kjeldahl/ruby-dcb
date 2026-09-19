@@ -19,15 +19,21 @@ module DcbEventStore
     # so this is the common case); projections without a snapshot share a read
     # from the start of the log. The reads are merged into one ascending
     # stream before partitioning, and a projection skips whatever it already
-    # holds. Afterwards the snapshots that fell behind by at least their
-    # +every+ events (or did not exist yet) are written at the position the
-    # condition guards, so the states they hold are exactly the states this
-    # build returned.
+    # holds.
+    #
+    # The store's last position is taken *before* the reads, so every event
+    # up to it was covered by them and the condition can guard up to the log
+    # head rather than up to the last matching event. Snapshots are written
+    # there too, once they have fallen +every+ positions behind the head (or
+    # did not exist yet), so the catch-up read after a snapshot stays short
+    # however quiet the entity is; the states they hold are exactly the
+    # states this build returned.
     def self.build(store, snapshots: nil, **projections)
       DcbEventStore.instrumentation.instrument(EVENT, projections: projections.keys) do |payload|
+        head = store.last_position if snapshots
         entries = Snapshotting.load(snapshots, projections)
         events = read_events(store, projections, entries)
-        folded = fold(projections, events, entries)
+        folded = fold(projections, events, entries, head)
 
         payload[:event_count] = events.size
         payload[:last_position] = folded.max_position
@@ -68,9 +74,9 @@ module DcbEventStore
       Query.new(projections.values.flat_map { |p| p.query.items })
     end
 
-    def self.fold(projections, events, entries)
+    def self.fold(projections, events, entries, head)
       criteria = compile_criteria(projections)
-      events_by_projection, max_position = partition_events(events, projections, criteria, entries)
+      events_by_projection, max_position = partition_events(events, projections, criteria, entries, head)
       states = projections.to_h do |name, proj|
         entry = entries[name]
         state = entry ? proj.fold(events_by_projection[name], from: entry.state) : proj.fold(events_by_projection[name])
@@ -88,7 +94,7 @@ module DcbEventStore
       end
     end
 
-    def self.partition_events(events, projections, criteria, entries)
+    def self.partition_events(events, projections, criteria, entries, head)
       events_by_projection = Hash.new { |h, k| h[k] = [] }
 
       events.each do |event|
@@ -104,10 +110,10 @@ module DcbEventStore
       end
 
       # store reads return events in ascending sequence order, so the last
-      # event carries the highest position; a snapshot ahead of every event
-      # read (nothing new since it was taken) pins the position instead. nil
-      # only when there are neither.
-      max_position = [events.last&.sequence_position, *entries.values.map(&:position)].compact.max
+      # event carries the highest position; the log head read before the
+      # reads, or a snapshot ahead of every event read, pins the position
+      # instead. nil only when there is none of them.
+      max_position = [head, events.last&.sequence_position, *entries.values.map(&:position)].compact.max
       [events_by_projection, max_position]
     end
 

@@ -1,8 +1,10 @@
 module DcbEventStore
   class PostgresStore
     # DDL for the PostgreSQL backend: the events table with its indexes (GIN
-    # on tags), the advisory-lock helper PostgresStore#acquire_locks! calls
-    # and the trigger that keeps the table append-only.
+    # on tags), the advisory-lock helper PostgresStore#acquire_locks! calls,
+    # the trigger that keeps the table append-only, and the
+    # projection_snapshots table Snapshots::PostgresSnapshotStore writes to
+    # (mutable by design: no trigger).
     module Schema
       CREATE_SQL = <<~SQL.freeze
         CREATE TABLE IF NOT EXISTS events (
@@ -42,9 +44,19 @@ module DcbEventStore
         CREATE TRIGGER enforce_append_only
           BEFORE UPDATE OR DELETE ON events
           FOR EACH ROW EXECUTE FUNCTION prevent_event_mutation();
+
+        CREATE TABLE IF NOT EXISTS projection_snapshots (
+          key        TEXT PRIMARY KEY,
+          position   BIGINT NOT NULL,
+          state      JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
       SQL
 
-      DROP_SQL = "DROP TABLE IF EXISTS events CASCADE;".freeze
+      DROP_SQL = <<~SQL.freeze
+        DROP TABLE IF EXISTS events CASCADE;
+        DROP TABLE IF EXISTS projection_snapshots;
+      SQL
 
       def self.create!(conn)
         conn.exec(CREATE_SQL)

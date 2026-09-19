@@ -13,14 +13,10 @@ module DcbEventStore
   #   dcb.snapshot.misses        counter            snapshots asked for but missing
   #   dcb.snapshot.writes        counter            snapshots written
   #   dcb.snapshot.folded        distribution       events folded on top of a snapshot before it was rewritten
-  #   dcb.stream.hits            counter            materialized streams already held
-  #   dcb.stream.misses          counter            materialized streams built from a full read
-  #   dcb.stream.fetched         counter            events pulled from the store into streams
-  #   dcb.stream.evicted         counter            streams dropped to stay within limits
   #
   # dcb.decision_model.events is the number the snapshots exist to hold
   # down: with snapshots working it stays flat as a projection's history
-  # grows. The snapshot and stream counters give hit rates.
+  # grows. The snapshot counters give the hit rate.
   #
   # Metrics are tagged with the emitting store (demodulized, e.g.
   # store=PostgresStore); dcb.subscribe.delivered additionally carries
@@ -67,7 +63,6 @@ module DcbEventStore
       when StoreInstrumentation::APPEND_EVENT then record_append(event, tags)
       when StoreInstrumentation::SUBSCRIBE_EVENT then record_subscribe(event, tags)
       when StoreInstrumentation::SNAPSHOT_EVENT then record_snapshot(event, tags)
-      when StoreInstrumentation::STREAM_EVENT then record_stream(event, tags)
       when DecisionModel::EVENT then record_decision_model(event, tags)
       end
     end
@@ -130,14 +125,6 @@ module DcbEventStore
         counter(metric("snapshot", "writes"), 1, tags)
         appsignal.add_distribution_value(metric("snapshot", "folded"), payload.fetch(:folded_count), tags)
       end
-    end
-
-    def record_stream(event, tags)
-      payload = event.payload
-      return unless payload.key?(:hits)
-
-      %i[hits misses evicted].each { |name| counter(metric("stream", name.to_s), payload.fetch(name), tags) }
-      counter(metric("stream", "fetched"), payload.fetch(:fetched_count), tags)
     end
 
     def counter(name, value, tags)

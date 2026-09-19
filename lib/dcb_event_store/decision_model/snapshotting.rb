@@ -41,8 +41,9 @@ module DcbEventStore
         return 0 unless folded.max_position
 
         projections.count do |name, proj|
+          next false unless due?(proj.snapshot, folded.entries[name], folded.max_position)
+
           folded_count = folded.events_by_projection[name].size
-          next false unless due?(proj.snapshot, folded.entries[name], folded_count, folded.max_position)
 
           payload = { store: snapshots.class.name, operation: :write, projection: name,
                       key: proj.snapshot.key(proj.query), position: folded.max_position, folded_count: folded_count }
@@ -54,14 +55,15 @@ module DcbEventStore
         end
       end
 
-      # A snapshot is due when the projection has none yet, or when this build
-      # folded at least +every+ events on top of it and there is a newer
-      # position to record.
-      def self.due?(snapshot, entry, folded_count, max_position)
+      # A snapshot is due when the projection has none yet, or when the
+      # position this build guards (the log head) is at least +every+ ahead of
+      # it: whether the events in between matched the projection or not, the
+      # next catch-up read would have to look past them.
+      def self.due?(snapshot, entry, max_position)
         return false unless snapshot
         return true if entry.nil?
 
-        folded_count >= snapshot.every && entry.position < max_position
+        max_position - entry.position >= snapshot.every
       end
 
       private_class_method :entries_from, :due?

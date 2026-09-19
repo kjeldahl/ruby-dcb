@@ -13,7 +13,6 @@ class TestPostgresSnapshotStore < Minitest::Test
 
   def setup
     setup_db
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(@conn)
     @snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(@conn)
     @snapshots.clear
   end
@@ -22,27 +21,15 @@ class TestPostgresSnapshotStore < Minitest::Test
     teardown_db
   end
 
-  def test_create_is_idempotent
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(@conn)
-
+  # The table comes with the events schema, so a dropped schema takes it
+  # along and a re-created one brings it back empty.
+  def test_table_is_part_of_the_store_schema
     @snapshots.store("k", position: 1, state: { n: 1 })
-    assert_equal 1, @snapshots.fetch("k").position
-  end
-
-  def test_drop_removes_the_table_and_create_brings_it_back
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.drop!(@conn)
+    DcbEventStore::PostgresStore::Schema.drop!(@conn)
 
     assert_raises(PG::UndefinedTable) { @snapshots.fetch("k") }
 
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(@conn)
-    assert_nil @snapshots.fetch("k")
-  end
-
-  def test_drop_is_idempotent
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.drop!(@conn)
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.drop!(@conn)
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(@conn)
-
+    DcbEventStore::PostgresStore::Schema.create!(@conn)
     assert_nil @snapshots.fetch("k")
   end
 

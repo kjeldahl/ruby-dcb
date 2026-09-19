@@ -35,7 +35,6 @@ requires:
   - ./test/unit/test_lock_keys
   - ./test/unit/test_snapshot
   - ./test/unit/test_in_memory_snapshot_store
-  - ./test/unit/test_materialized_streams
   - ./test/unit/test_query_key_collisions
   - ./test/integration/test_append_only
   - ./test/integration/test_subscribe
@@ -68,21 +67,16 @@ matcher:
     - DcbEventStore::Railtie*
     - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
-    # Snapshots and materialized streams: the configuration object, the
-    # driver-free snapshot store and the caching store decorator. The SQL
-    # snapshot stores are left out for the same reason as the SQL event
-    # stores -- driver glue over a live server.
+    # Snapshots: the configuration object and the driver-free snapshot
+    # store. The SQL snapshot stores are left out for the same reason as the
+    # SQL event stores -- driver glue over a live server.
     - DcbEventStore::Snapshot*
     - DcbEventStore::Snapshots::InMemorySnapshotStore*
-    - DcbEventStore::MaterializedStreams*
-    # Measured: 97.55% over these three plus DecisionModel* (46 of 1885
-    # alive). What survives is equivalent by construction: removing a
-    # @mutex.synchronize (nothing a single-threaded suite can observe),
-    # dropping a fast path that only saves work (DecisionModel.read_events'
-    # single-group read, MaterializedStreams#events_of's single-stream
-    # merge), h[k] -> h.key?(k)/h.fetch(k) on keys that are always present,
-    # Struct.new([]) for Struct.new([], nil), and the max_events: 1_000_000
-    # default, which only a million cached events would pin.
+    # What survives on these two plus DecisionModel* is equivalent by
+    # construction: removing a @mutex.synchronize (nothing a single-threaded
+    # suite can observe), dropping a fast path that only saves work
+    # (DecisionModel.read_events' single-group read), h[k] -> h.key?(k) /
+    # h.fetch(k) on keys that are always present.
     # Pure collaborators extracted from the stores: SQL building, the PG
     # dialect it is parametrized with, advisory-lock key derivation, the PG
     # array codec and the created_at parser. Fast to mutate (no live PG) and

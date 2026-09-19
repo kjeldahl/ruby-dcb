@@ -13,7 +13,6 @@ class TestSqliteSnapshotStore < Minitest::Test
 
   def setup
     setup_db
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.create!(@db)
     @snapshots = DcbEventStore::Snapshots::SqliteSnapshotStore.new(@db)
   end
 
@@ -21,24 +20,15 @@ class TestSqliteSnapshotStore < Minitest::Test
     teardown_db
   end
 
-  def test_create_is_idempotent
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.create!(@db)
-
+  # The table comes with the events schema, so a dropped schema takes it
+  # along and a re-created one brings it back empty.
+  def test_table_is_part_of_the_store_schema
     @snapshots.store("k", position: 1, state: { n: 1 })
-    assert_equal 1, @snapshots.fetch("k").position
-  end
-
-  def test_drop_removes_the_table
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.drop!(@db)
+    DcbEventStore::SqliteStore::Schema.drop!(@db)
 
     assert_raises(SQLite3::SQLException) { @snapshots.fetch("k") }
-  end
 
-  def test_drop_is_idempotent
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.drop!(@db)
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.drop!(@db)
-
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.create!(@db)
+    DcbEventStore::SqliteStore::Schema.create!(@db)
     assert_nil @snapshots.fetch("k")
   end
 

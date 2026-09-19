@@ -1,20 +1,18 @@
 require_relative "../test_helper"
 
-# Regression tests for a cache-key ambiguity: MaterializedStreams and
-# Snapshot both identify a query, and both used to do it with Query#to_s.
-# That rendering was built for logs and joins types and tags with "," without
-# escaping, so distinct queries rendered identically -- a single tag "a,b"
-# renders exactly like the two tags "a" and "b" ("Query[E{a,b}]"). Whichever
-# query was seen second was then served the other one's materialized stream,
-# or the other one's snapshot, and returned events or a state that belong to
-# a different entity.
+# Regression tests for a cache-key ambiguity: Snapshot identifies a query,
+# and used to do it with Query#to_s. That rendering was built for logs and
+# joins types and tags with "," without escaping, so distinct queries rendered
+# identically -- a single tag "a,b" renders exactly like the two tags "a" and
+# "b" ("Query[E{a,b}]"). Whichever query was seen second was then served the
+# other one's snapshot, and returned a state that belongs to a different
+# entity.
 #
-# Both now key off Query#fingerprint, which is unambiguous. These tests pin
+# Keys now come from Query#fingerprint, which is unambiguous. These tests pin
 # that: the pair below still renders alike, and must still be kept apart.
 class TestQueryKeyCollisions < Minitest::Test
   cover "DcbEventStore::Query*"
   cover "DcbEventStore::Snapshot*"
-  cover "DcbEventStore::MaterializedStreams*"
 
   def setup
     @store = DcbEventStore::InMemoryStore.new
@@ -34,29 +32,6 @@ class TestQueryKeyCollisions < Minitest::Test
 
     assert_equal [1], @store.read(@two_tags).map(&:sequence_position)
     assert_equal [2], @store.read(@one_tag).map(&:sequence_position)
-  end
-
-  def test_materialized_streams_do_not_confuse_two_queries_that_render_alike
-    streams = DcbEventStore::MaterializedStreams.new(@store)
-
-    assert_equal [1], streams.read(@two_tags).map(&:sequence_position)
-    assert_equal [2], streams.read(@one_tag).map(&:sequence_position),
-                 "the stream cached for #{@two_tags} was served for a different query"
-    assert_equal 2, streams.size
-  end
-
-  # Same for the types side of an item: one type "A,B" against the two types
-  # "A" and "B".
-  def test_materialized_streams_do_not_confuse_two_type_lists_that_render_alike
-    @store.append([DcbEventStore::Event.new(type: "A,B", tags: ["t"])])
-    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t"])])
-    one_type = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A,B"], tags: ["t"])])
-    two_types = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t"])])
-    streams = DcbEventStore::MaterializedStreams.new(@store)
-
-    assert_equal one_type.to_s, two_types.to_s
-    assert_equal [3], streams.read(one_type).map(&:sequence_position)
-    assert_equal [4], streams.read(two_types).map(&:sequence_position)
   end
 
   def test_snapshot_keys_do_not_confuse_two_queries_that_render_alike

@@ -119,8 +119,8 @@ class TestQuery < Minitest::Test
   end
 end
 
-# Query#fingerprint is the cache identity snapshots and materialized streams
-# key on; unlike #to_s it must tell apart every pair of different queries.
+# Query#fingerprint is the cache identity snapshots key on; unlike #to_s it
+# must tell apart every pair of different queries.
 class TestQueryFingerprint < Minitest::Test
   cover "DcbEventStore::Query*"
 

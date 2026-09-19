@@ -2,30 +2,15 @@ require "json"
 
 module DcbEventStore
   module Snapshots
-    # Snapshots persisted in a projection_snapshots table next to the events,
-    # so every process sharing the database shares the snapshots and a
-    # snapshot is read on the connection that reads the events after it.
+    # Snapshots persisted in the projection_snapshots table next to the events
+    # (installed by PostgresStore::Schema.create!), so every process sharing
+    # the database shares the snapshots and a snapshot is read on the
+    # connection that reads the events after it.
     #
     # State travels as JSON (JSONB column). The upsert only moves a snapshot
     # forward: a concurrent builder that folded to a lower position leaves
     # the newer row alone.
     class PostgresSnapshotStore
-      module Schema
-        CREATE_SQL = <<~SQL.freeze
-          CREATE TABLE IF NOT EXISTS projection_snapshots (
-            key        TEXT PRIMARY KEY,
-            position   BIGINT NOT NULL,
-            state      JSONB NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-          );
-        SQL
-
-        DROP_SQL = "DROP TABLE IF EXISTS projection_snapshots;".freeze
-
-        def self.create!(conn) = conn.exec(CREATE_SQL)
-        def self.drop!(conn) = conn.exec(DROP_SQL)
-      end
-
       UPSERT_SQL = <<~SQL.freeze
         INSERT INTO projection_snapshots (key, position, state, updated_at)
         VALUES ($1, $2, $3::jsonb, now())

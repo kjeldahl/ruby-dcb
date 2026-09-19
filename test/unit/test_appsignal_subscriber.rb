@@ -215,7 +215,7 @@ class TestAppsignalSubscriber < Minitest::Test
     Object.send(:remove_const, :Appsignal) if fake_module && Object.const_defined?(:Appsignal)
   end
 
-  # --- decision models, snapshots and materialized streams ---
+  # --- decision models and snapshots ---
 
   def test_decision_model_records_events_read_per_build
     @subscriber.call(build_event(name: "decision_model.dcb",
@@ -263,30 +263,6 @@ class TestAppsignalSubscriber < Minitest::Test
 
     assert_equal ["dcb.snapshot.errors"], @appsignal.counters.map(&:first)
     assert_equal ["dcb.snapshot.duration"], @appsignal.distributions.map(&:first)
-  end
-
-  def test_stream_read_counts_hits_misses_fetched_and_evicted
-    @subscriber.call(build_event(name: "stream.dcb",
-                                 payload: {store: "DcbEventStore::MaterializedStreams", streams: 3, hits: 2, misses: 1,
-                                           fetched_count: 40, event_count: 1200, evicted: 1}))
-
-    tags = {store: "MaterializedStreams"}
-    assert_equal [["dcb.stream.hits", 2, tags], ["dcb.stream.misses", 1, tags], ["dcb.stream.evicted", 1, tags],
-                  ["dcb.stream.fetched", 40, tags]], @appsignal.counters
-  end
-
-  def test_stream_read_with_nothing_new_counts_only_hits
-    @subscriber.call(build_event(name: "stream.dcb",
-                                 payload: {store: "S", streams: 1, hits: 1, misses: 0, fetched_count: 0,
-                                           event_count: 5, evicted: 0}))
-
-    assert_equal ["dcb.stream.hits"], @appsignal.counters.map(&:first)
-  end
-
-  def test_failed_stream_read_counts_only_the_error
-    @subscriber.call(build_event(name: "stream.dcb", error: IOError.new("down"), payload: {store: "S"}))
-
-    assert_equal ["dcb.stream.errors"], @appsignal.counters.map(&:first)
   end
 
   # --- end to end through a store ---

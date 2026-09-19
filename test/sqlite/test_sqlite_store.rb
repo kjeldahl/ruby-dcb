@@ -35,7 +35,6 @@ class TestSqliteStore < Minitest::Test
   # For SnapshotDecisionModelContract: the snapshot table lives in the same
   # throwaway database file as the events.
   def build_snapshot_store
-    DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.create!(@db)
     DcbEventStore::Snapshots::SqliteSnapshotStore.new(@db)
   end
 

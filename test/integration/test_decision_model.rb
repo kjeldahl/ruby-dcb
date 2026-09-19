@@ -24,7 +24,6 @@ class TestDecisionModel < Minitest::Test
   # For SnapshotDecisionModelContract: the snapshot table lives next to the
   # events in the test database, emptied for each test.
   def build_snapshot_store
-    DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(@conn)
     DcbEventStore::Snapshots::PostgresSnapshotStore.new(@conn).tap(&:clear)
   end
 end

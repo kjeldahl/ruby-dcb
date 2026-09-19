@@ -1,23 +1,24 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Measures what projection snapshots and materialized streams buy a decision
-# model, against the plain read-everything build.
+# Measures what projection snapshots buy a decision model, against the plain
+# read-everything build.
 #
 # Seeds the course subscription dataset of performance.rb, adds one course
 # per stream size in STREAM_SIZES (a course with exactly that many
 # subscriptions), then times the five-projection subscribe_student decision
-# model on each course four ways:
+# model on each course three ways:
 #
 #   baseline              read + fold the whole stream every time
 #   snapshots (db)        Snapshots::<Backend>SnapshotStore in the same database
 #   snapshots (memory)    Snapshots::InMemorySnapshotStore
-#   materialized streams  MaterializedStreams wrapper around the store
 #
 # The warm numbers are steady state (the snapshot or stream already exists);
 # "snapshot cold" is the first build, which reads everything and also writes
 # the snapshots. A final section runs the real write loop (build + append with
 # condition) under each strategy, since that is what an application does.
+# (An in-process materialized-stream cache was measured with this script too
+# and dropped; its numbers are kept in SNAPSHOTS.md.)
 #
 # Usage:
 #   DCB_BACKEND=sqlite bundle exec ruby examples/snapshot_benchmark.rb            # 20k students, 100 courses
@@ -104,10 +105,8 @@ module SnapshotBenchmark
   def self.snapshot_store(session)
     case session.name
     when "postgres"
-      DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(session.connection)
       DcbEventStore::Snapshots::PostgresSnapshotStore.new(session.connection).tap(&:clear)
     when "sqlite"
-      DcbEventStore::Snapshots::SqliteSnapshotStore::Schema.create!(session.connection)
       DcbEventStore::Snapshots::SqliteSnapshotStore.new(session.connection).tap(&:clear)
     else
       DcbEventStore::Snapshots::InMemorySnapshotStore.new
@@ -134,7 +133,6 @@ module SnapshotBenchmark
     store = session.store
     db_snaps = snapshot_store(session)
     mem_snaps = DcbEventStore::Snapshots::InMemorySnapshotStore.new
-    materialized = DcbEventStore::MaterializedStreams.new(store)
     summary = {}
 
     STREAM_SIZES.each do |n|
@@ -161,19 +159,15 @@ module SnapshotBenchmark
       mem_warm = times { build(store, sid, cid, snapshots: mem_snaps, every: 1) }
       row("snapshots (memory), warm", mem_warm)
 
-      build(materialized, sid, cid)
-      mat_warm = times { build(materialized, sid, cid) }
-      row("materialized streams, warm", mat_warm)
-
-      summary[n] = { baseline: p50(base), cold: p50(cold), db: p50(db_warm), memory: p50(mem_warm), materialized: p50(mat_warm) }
+      summary[n] = { baseline: p50(base), cold: p50(cold), db: p50(db_warm), memory: p50(mem_warm) }
     end
 
     puts
-    puts "| stream | baseline | snapshot cold | snapshots (db) | snapshots (memory) | materialized | speedup db | speedup mem |"
-    puts "|---|---|---|---|---|---|---|---|"
+    puts "| stream | baseline | snapshot cold | snapshots (db) | snapshots (memory) | speedup db | speedup mem |"
+    puts "|---|---|---|---|---|---|---|"
     summary.each do |n, s|
-      puts "| %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.1fx | %.1fx |" % [
-        n, s[:baseline], s[:cold], s[:db], s[:memory], s[:materialized], s[:baseline] / s[:db], s[:baseline] / s[:memory]
+      puts "| %d | %.2f | %.2f | %.2f | %.2f | %.1fx | %.1fx |" % [
+        n, s[:baseline], s[:cold], s[:db], s[:memory], s[:baseline] / s[:db], s[:baseline] / s[:memory]
       ]
     end
   end
@@ -183,7 +177,6 @@ module SnapshotBenchmark
   def self.run_write_loop(session, n)
     store = session.store
     db_snaps = snapshot_store(session)
-    materialized = DcbEventStore::MaterializedStreams.new(store)
     cid = "bench-#{n}"
     iterations = [ITERATIONS, 30].min
     counter = 0
@@ -198,9 +191,6 @@ module SnapshotBenchmark
       subscribe(store, next_student.call, cid, snapshots: db_snaps, every: every)
       row("snapshots (db), every: #{every}", times(iterations) { subscribe(store, next_student.call, cid, snapshots: db_snaps, every: every) })
     end
-
-    subscribe(materialized, next_student.call, cid)
-    row("materialized streams", times(iterations) { subscribe(materialized, next_student.call, cid) })
   end
 
   def self.run

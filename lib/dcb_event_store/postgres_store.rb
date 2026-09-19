@@ -45,6 +45,11 @@ module DcbEventStore
       @conn.exec_params("#{sql} LIMIT #{limit}", params).to_a
     end
 
+    def max_position
+      value = @conn.exec("SELECT max(sequence_position) FROM events")[0]["max"]
+      value && Integer(value)
+    end
+
     def acquire_locks!(condition)
       keys = LockKeys.for(condition)
       pg_arr = "{#{keys.join(',')}}"

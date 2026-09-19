@@ -73,4 +73,12 @@ module ClientContract
       client.append(DcbEventStore::Event.new(type: "SeatReserved", tags: ["seat:A1"]), condition)
     end
   end
+
+  def test_client_last_position_delegates_to_the_store
+    client = DcbEventStore::Client.new(@store)
+    assert_nil client.last_position
+
+    last = client.append(DcbEventStore::Event.new(type: "A")).last
+    assert_equal last.sequence_position, client.last_position
+  end
 end

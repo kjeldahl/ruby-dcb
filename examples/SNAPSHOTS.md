@@ -77,23 +77,29 @@ A snapshot is a projection's state folded through every matching event with
   snapshot positions). Every event matching the union at or below that
   position is either in a snapshot or was read, so the guarantee is the same
   as without snapshots.
-- **Write policy** `every:` — written when missing, then once a build folded
-  at least `every` events on top of the snapshot. The upsert is forward-only
-  (a slower concurrent builder cannot roll a snapshot back).
+- **Write policy** `every:` — written when missing, then once the log head
+  is at least `every` positions past the snapshot, whether the events in
+  between matched or not (the spike counted matching events only, which left
+  an idle entity's snapshot behind and let its catch-up read grow; the store
+  now exposes `last_position`, taken before the reads, and both the
+  condition and the snapshots use it). The upsert is forward-only (a slower
+  concurrent builder cannot roll a snapshot back).
 - **Stores**: `InMemorySnapshotStore` (Hash + Mutex, no serialization),
   `PostgresSnapshotStore` and `SqliteSnapshotStore` (`projection_snapshots`
-  table, JSON state, own `Schema.create!`; separate from the events schema and
-  not append-only). `fetch_many` loads all of a build's snapshots in one round
-  trip. States that are not JSON-shaped take `dump:`/`load:`.
+  table, JSON state, installed by the backend's `Schema.create!` alongside
+  the events; not append-only). `fetch_many` loads all of a build's
+  snapshots in one round trip. States that are not JSON-shaped take
+  `dump:`/`load:`.
 
-### Materialized streams
+### Materialized streams (spike, not shipped)
 
-`MaterializedStreams` wraps a store and keeps the decoded `SequencedEvent`s of
-every `QueryItem` it has served; the next read of that item is a `read_from`
-after the last event held, appended to the stream. A multi-item query merges
-its items' streams. Nothing is derived, so nothing can be stale in the
-snapshot sense, but the fold (and the partitioning in `DecisionModel`) still
-runs over the whole stream, and the cache is per process.
+The spike's `MaterializedStreams` wrapped a store and kept the decoded
+`SequencedEvent`s of every `QueryItem` it had served; the next read of that
+item was a `read_from` after the last event held, appended to the stream, and
+a multi-item query merged its items' streams. Nothing derived, so nothing
+stale in the snapshot sense, but the fold (and the partitioning in
+`DecisionModel`) still ran over the whole stream, and the cache was per
+process. Measured below, then removed on the strength of the numbers.
 
 ### Consistency caveat shared by both
 
@@ -227,34 +233,34 @@ catch-up read").
   the write loop make them 3–30x slower than snapshots. They would only make
   sense for a workload that folds the same long streams from one process
   and cannot name its projections — nothing in this gem's examples looks
-  like that. Recommendation: keep the spike out of the release, or ship it
-  clearly marked as the lesser tool.
+  like that. Dropped; the numbers stay here as the reason.
 - The cheaper win that needs no new concept: row decoding is 55–68% of a
   replay and `Time.parse` is two thirds of that; `Time.iso8601` /
   `Time.strptime` would take ~35% off every read on both backends. Worth
   doing regardless of snapshots.
-- What snapshots cost in operations: a `projection_snapshots` table to
-  create, a `Snapshot` (name, version) per projection that wants one, a
-  version bump discipline when handlers change, and on PostgreSQL an
-  `autovacuum_analyze_scale_factor` low enough that catch-up reads keep their
-  index plan. Their consistency is exactly the consistency of the append
+- What snapshots cost in operations: a `Snapshot` (name, version) per
+  projection that wants one, a version bump discipline when handlers change,
+  and on PostgreSQL an `autovacuum_analyze_scale_factor` low enough that
+  catch-up reads keep their index plan (the `projection_snapshots` table
+  comes with `Schema.create!`). Their consistency is exactly the consistency of the append
   condition they are written at — the per-tag advisory lock reasoning in §2
   applies unchanged.
 
 Observability for all of it is in the instrumentation: `decision_model.dcb`
 `event_count` (flat when snapshots work), `snapshot.dcb` loads/writes with hit
-counts, `stream.dcb` per materialized read, and the corresponding AppSignal
-metrics (`dcb.decision_model.events`, `dcb.snapshot.*`, `dcb.stream.*`).
+counts, and the corresponding AppSignal metrics (`dcb.decision_model.events`,
+`dcb.snapshot.*`).
 
-## 5. Open questions
+## 5. Decisions taken after the spike
 
-- Snapshot policy for entities with a long history but no recent activity:
-  the position never advances (no matching events, no rewrite), so the
-  catch-up read grows with everything appended since. A "rewrite when the
-  log head moved more than N positions" policy needs the store to expose its
-  head position.
-- Where to put `Query#fingerprint`-keyed snapshots when a projection's
-  `Query` has many items: keys are unbounded text today.
-- Whether to fold the `projection_snapshots` DDL into `Schema.create!`
-  (currently a separate, opt-in `Snapshots::<Backend>SnapshotStore::Schema`).
-- Whether `MaterializedStreams` stays in the gem at all.
+- Materialized streams dropped.
+- `projection_snapshots` DDL folded into both backends' `Schema.create!`.
+- Stores expose `last_position`; a snapshotted build guards up to the log
+  head and rewrites snapshots once the head is `every` positions past them,
+  so an idle entity's catch-up read no longer grows with the log.
+- The `Time.parse` swap in row decoding is a separate change.
+- The `autovacuum_analyze_scale_factor` advice stays here (§3.1), with a
+  pointer from the README.
+
+Still open: keys are unbounded text (`name/vN/<fingerprint>`); a projection
+with a very long `Query` gets a very long key.

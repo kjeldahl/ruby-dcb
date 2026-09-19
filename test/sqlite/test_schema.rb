@@ -20,7 +20,7 @@ class TestSqliteSchema < Minitest::Test
   def test_create_is_idempotent
     DcbEventStore::SqliteStore::Schema.create!(@db)
 
-    assert_equal %w[event_tags events], table_names
+    assert_equal %w[event_tags events projection_snapshots], table_names
   end
 
   def test_create_leaves_existing_events_in_place
@@ -31,7 +31,7 @@ class TestSqliteSchema < Minitest::Test
     assert_equal 1, @store.read(DcbEventStore::Query.all).to_a.size
   end
 
-  def test_drop_removes_both_tables
+  def test_drop_removes_all_tables
     DcbEventStore::SqliteStore::Schema.drop!(@db)
 
     assert_empty table_names
@@ -80,7 +80,7 @@ class TestSqliteSchema < Minitest::Test
     DcbEventStore::SqliteStore::Schema.drop!(@db)
     DcbEventStore::SqliteStore::Schema.create!(@db)
 
-    assert_equal %w[event_tags events], table_names
+    assert_equal %w[event_tags events projection_snapshots], table_names
     assert_empty @store.read(DcbEventStore::Query.all).to_a
     assert_empty tag_rows
     assert_equal 1, @store.append([DcbEventStore::Event.new(type: "B")]).first.sequence_position
@@ -261,7 +261,8 @@ class TestSqliteSchema < Minitest::Test
   end
 
   def table_names
-    @db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('events', 'event_tags')")
+    @db.execute("SELECT name FROM sqlite_master WHERE type = 'table' " \
+                "AND name IN ('events', 'event_tags', 'projection_snapshots')")
        .map { |row| row["name"] }.sort
   end
 
