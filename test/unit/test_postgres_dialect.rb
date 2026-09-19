@@ -130,4 +130,31 @@ class TestPostgresDialect < Minitest::Test
     assert_equal %w[a b], @dialect.decode_list("{a,b}")
     assert_equal ["a,b"], @dialect.decode_list('{"a,b"}')
   end
+
+  # --- decode_timestamp ---
+
+  def test_decode_timestamp_passes_through_a_time_the_driver_built
+    # The store's type map decodes TIMESTAMPTZ in the driver, so the common
+    # case is a Time that must not be rebuilt.
+    time = Time.utc(2026, 6, 13, 22, 0, 0)
+
+    assert_same time, @dialect.decode_timestamp(time)
+  end
+
+  def test_decode_timestamp_passes_through_a_subclass_of_time
+    # Type maps are the caller's to replace, and a decoder of theirs may
+    # build something that is a Time without being exactly one.
+    subclass = Class.new(Time).now
+
+    assert_same subclass, @dialect.decode_timestamp(subclass)
+  end
+
+  def test_decode_timestamp_parses_text
+    # A connection whose type map was replaced, or a column typed TIMESTAMP
+    # rather than TIMESTAMPTZ, still hands back text.
+    decoded = @dialect.decode_timestamp("2026-06-13 22:00:00.123456+00")
+
+    assert_equal Time.parse("2026-06-13 22:00:00.123456+00"), decoded
+    assert_equal 123_456, decoded.usec
+  end
 end

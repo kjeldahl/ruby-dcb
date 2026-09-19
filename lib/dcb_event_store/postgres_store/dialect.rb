@@ -1,4 +1,5 @@
 require "json"
+require_relative "../sql_store/timestamp"
 
 module DcbEventStore
   class PostgresStore
@@ -78,6 +79,17 @@ module DcbEventStore
 
       def decode_list(str)
         @codec.parse(str)
+      end
+
+      # The created_at cell. The store puts a TIMESTAMPTZ decoder on its
+      # connection (see PostgresStore::RESULT_TYPE_MAP), so the driver has
+      # normally built the Time already; text still arrives from a connection
+      # whose type map was replaced, or from a column typed TIMESTAMP rather
+      # than TIMESTAMPTZ.
+      def decode_timestamp(value)
+        return value if value.is_a?(Time)
+
+        SqlStore::Timestamp.parse(value)
       end
     end
   end

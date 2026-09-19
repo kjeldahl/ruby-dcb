@@ -12,6 +12,7 @@ SimpleCov.start do
     "lib/dcb_event_store/sql_store.rb",
     "lib/dcb_event_store/sql_store/sql_builder.rb",
     "lib/dcb_event_store/sql_store/row_mapper.rb",
+    "lib/dcb_event_store/sql_store/timestamp.rb",
     "lib/dcb_event_store/store.rb",
     "lib/dcb_event_store/client.rb"
   ]

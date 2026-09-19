@@ -42,6 +42,15 @@ DcbEventStore::SqliteStore::Schema.create!(db)
 
 Both are idempotent (`CREATE TABLE IF NOT EXISTS`), so they can run at boot. `Schema.configure!(db)` alone applies the pragmas to a further SQLite connection on an existing database.
 
+### The store owns its connection
+
+**A connection handed to a store belongs to that store**, and must not also carry application queries. The store configures it and holds state on it:
+
+- `PostgresStore` replaces the connection's **result type map** so `TIMESTAMPTZ` is decoded by the driver, keeps it in `LISTEN` for the duration of a `subscribe`, and holds advisory locks and transactions on it during an append.
+- `SqliteStore` relies on the pragmas `Schema.create!`/`configure!` set (WAL, foreign keys, busy handler, hash rows), and appends in `BEGIN IMMEDIATE` transactions.
+
+Sharing one connection between a store and your own queries means your results get decoded by the store's type map, and your statements land inside its transactions. Give the application its own connection, and each concurrent store its own.
+
 ## Choosing a backend
 
 Both backends implement the same API and pass the same contract suite; the differences are operational:
@@ -57,7 +66,7 @@ Both backends implement the same API and pass the same contract suite; the diffe
 
 Rule of thumb: SQLite for single-host deployments, embedded use and test suites that want real SQL; PostgreSQL when appends must proceed in parallel across disjoint consistency boundaries, when several hosts share the store, or when subscribers should wake without polling. `InMemoryStore` (below) covers unit tests that want no database at all.
 
-See `examples/BENCHMARK.md` for the two backends measured side by side.
+See `examples/BENCHMARK.md` for the two backends measured side by side, including the cost of decoding a row.
 
 ## Usage
 

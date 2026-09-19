@@ -23,7 +23,7 @@ module DcbEventStore
           causation_id      TEXT,
           correlation_id    TEXT,
           schema_version    INTEGER NOT NULL DEFAULT 1,
-          created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          created_at        INTEGER NOT NULL DEFAULT (CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER))
         );
         CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
         CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events (correlation_id);

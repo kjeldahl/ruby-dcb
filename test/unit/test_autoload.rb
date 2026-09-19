@@ -62,7 +62,8 @@ class TestAutoload < Minitest::Test
 
     assert_equal(
       ["sql_store.rb", "sql_store/row_mapper.rb", "sql_store/sql_builder.rb",
-       "sqlite_store.rb", "sqlite_store/dialect.rb", "sqlite_store/schema.rb"],
+       "sql_store/timestamp.rb", "sqlite_store.rb", "sqlite_store/dialect.rb",
+       "sqlite_store/schema.rb"],
       loaded["loaded"]
     )
   end

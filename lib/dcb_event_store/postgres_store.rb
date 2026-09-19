@@ -7,10 +7,32 @@ module DcbEventStore
   # Appends serialize on per-tag advisory locks (see LockKeys) so appends
   # touching disjoint tags still run in parallel, and subscribers are woken
   # through LISTEN/NOTIFY rather than polling.
+  #
+  # The store takes the connection over: it is the store's alone, and must
+  # not be shared with application queries. #subscribe puts it in LISTEN for
+  # as long as it runs, appends hold advisory locks on it, and #initialize
+  # replaces its result type map (below) -- so a caller issuing its own
+  # queries on the same connection would see them decoded by the store's map
+  # and would race the store's transactions. Give the application its own
+  # connection, or give the store one per thread.
   class PostgresStore < SqlStore
+    # Decoders the store installs on its connection. Only created_at is
+    # touched: TIMESTAMPTZ (OID 1184) comes back as a Time the driver built
+    # in C, which saves the row mapper a parse on every row read. Everything
+    # else falls through to text, which is what RowMapper and Dialect expect
+    # -- decoding jsonb and text[] here too would hand them Ruby objects they
+    # would only have to undo.
+    def self.result_type_map
+      map = PG::TypeMapByOid.new
+      map.add_coder(PG::TextDecoder::TimestampWithTimeZone.new(oid: 1184, format: 0))
+      map.default_type_map = PG::TypeMapAllStrings.new
+      map
+    end
+
     def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
       super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
       @conn = conn
+      @conn.type_map_for_results = self.class.result_type_map
       @dialect = Dialect.new
       @sql = SqlBuilder.new(@dialect)
       @row_mapper = RowMapper.new(@dialect, @upcaster)

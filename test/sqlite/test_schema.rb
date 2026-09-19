@@ -154,6 +154,65 @@ class TestSqliteSchema < Minitest::Test
     assert_equal "event_tags table is append-only: DELETE not allowed", error.message
   end
 
+  # --- created_at ---
+
+  # Schema DDL before created_at became epoch microseconds. Kept verbatim so
+  # the backward-compatibility test below reads what such a database holds.
+  LEGACY_EVENTS_SQL = <<~SQL.freeze
+    CREATE TABLE events (
+      sequence_position INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id          TEXT NOT NULL UNIQUE,
+      type              TEXT NOT NULL,
+      data              TEXT NOT NULL DEFAULT '{}',
+      tags              TEXT NOT NULL DEFAULT '[]',
+      causation_id      TEXT,
+      correlation_id    TEXT,
+      schema_version    INTEGER NOT NULL DEFAULT 1,
+      created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+  SQL
+
+  def test_created_at_is_stored_as_epoch_microseconds
+    @store.append([DcbEventStore::Event.new(type: "A")])
+
+    stored = @db.get_first_value("SELECT created_at FROM events")
+
+    assert_kind_of Integer, stored
+    assert_equal "INTEGER", column_type("events", "created_at")
+  end
+
+  def test_created_at_is_read_back_as_the_time_it_was_stamped
+    before = Time.now.utc
+    appended = @store.append([DcbEventStore::Event.new(type: "A")])
+    after = Time.now.utc
+
+    created_at = @store.read(DcbEventStore::Query.all).first.created_at
+
+    assert_predicate created_at, :utc?
+    assert_operator created_at, :>=, before - 1
+    assert_operator created_at, :<=, after + 1
+    assert_equal appended[0].created_at, created_at
+  end
+
+  def test_reads_a_database_whose_created_at_is_still_text
+    # An events table created by an earlier version of the gem: created_at is
+    # ISO 8601 text, and the store has to go on reading it.
+    legacy = File.join(@dir, "legacy.sqlite3")
+    db = SQLite3::Database.new(legacy)
+    DcbEventStore::SqliteStore::Schema.configure!(db)
+    db.execute_batch(LEGACY_EVENTS_SQL)
+    db.execute(
+      "INSERT INTO events (event_id, type, created_at) VALUES ('evt-1', 'A', '2026-06-13T22:00:00.123Z')"
+    )
+
+    event = DcbEventStore::SqliteStore.new(db).read(DcbEventStore::Query.all).first
+
+    assert_equal Time.utc(2026, 6, 13, 22, 0, 0, 123_000), event.created_at
+    assert_predicate event.created_at, :utc?
+  ensure
+    db&.close
+  end
+
   # --- event_tags index ---
 
   def test_append_writes_one_tag_row_per_tag
@@ -195,6 +254,11 @@ class TestSqliteSchema < Minitest::Test
   end
 
   private
+
+  def column_type(table, column)
+    @db.execute("SELECT name, type FROM pragma_table_info(?)", [table])
+       .find { |row| row["name"] == column }["type"]
+  end
 
   def table_names
     @db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('events', 'event_tags')")

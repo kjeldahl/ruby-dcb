@@ -26,6 +26,7 @@ requires:
   - ./test/unit/test_postgres_dialect
   - ./test/unit/test_sql_builder
   - ./test/unit/test_row_mapper
+  - ./test/unit/test_timestamp
   - ./test/unit/test_sql_store
   - ./test/unit/test_sqlite_dialect
   - ./test/unit/test_lock_keys
@@ -61,14 +62,15 @@ matcher:
     - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
     # Pure collaborators extracted from the stores: SQL building, the PG
-    # dialect it is parametrized with, advisory-lock key derivation and the PG
-    # array codec. Fast to mutate (no live PG) and fully covered by dedicated
-    # unit tests.
+    # dialect it is parametrized with, advisory-lock key derivation, the PG
+    # array codec and the created_at parser. Fast to mutate (no live PG) and
+    # fully covered by dedicated unit tests.
     - DcbEventStore::SqlStore::SqlBuilder*
     - DcbEventStore::PostgresStore::Dialect*
     - DcbEventStore::SqliteStore::Dialect*
     - DcbEventStore::PostgresStore::ArrayCodec*
     - DcbEventStore::PostgresStore::LockKeys*
+    - DcbEventStore::SqlStore::Timestamp*
 # The four store subjects below are left out on purpose: what remains in them
 # is thin driver glue (transactions, exec_params, LISTEN/NOTIFY, BEGIN
 # IMMEDIATE), the read/append/subscribe orchestration over those hooks, and
