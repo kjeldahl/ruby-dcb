@@ -114,7 +114,7 @@ module DcbEventStore
     # payload's counts are only filled in on completion.
     def record_snapshot(event, tags)
       payload = event.payload
-      case payload[:operation]
+      case payload.fetch(:operation)
       when :load
         loaded = payload[:loaded] or return
         counter(metric("snapshot", "hits"), loaded, tags)

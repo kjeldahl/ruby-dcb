@@ -53,16 +53,20 @@ module DcbEventStore
     # ascending sequence order. An event selected by two groups' queries is
     # read twice and kept once.
     def self.read_events(store, projections, entries)
-      groups = projections.group_by { |name, _proj| entries[name]&.position }
-      # No snapshots at all (including no projections: the union is Query.all,
-      # so the condition guards the whole log): one plain read.
-      return read_group(store, projections, nil).to_a if groups.empty? || groups.keys == [nil]
+      # No projections: the union is Query.all, and the condition guards the
+      # whole log, so the whole log is read.
+      return read_group(store, projections, nil).to_a if projections.empty?
 
+      groups = projections.group_by { |name, _proj| entries[name]&.position }
+      merge_reads(groups.map { |position, group| read_group(store, group.to_h, position) })
+    end
+
+    # Merges several ascending reads into one ascending stream, keeping an
+    # event read by more than one of them once.
+    def self.merge_reads(reads)
       by_position = {}
-      groups.each do |position, group|
-        read_group(store, group.to_h, position).each { |event| by_position[event.sequence_position] ||= event }
-      end
-      by_position.values.sort_by!(&:sequence_position)
+      reads.each { |events| events.each { |event| by_position[event.sequence_position] ||= event } }
+      by_position.sort_by(&:first).map(&:last)
     end
 
     def self.read_group(store, projections, position)
@@ -102,7 +106,8 @@ module DcbEventStore
         projections.each_key do |name|
           # An event already folded into this projection's snapshot: its read
           # group started at another projection's (lower) position.
-          next if entries[name] && event.sequence_position <= entries[name].position
+          entry = entries[name]
+          next if entry && event.sequence_position <= entry.position
           next unless matches_any_item?(criteria.fetch(name), event, tags)
 
           events_by_projection[name] << event
@@ -125,8 +130,8 @@ module DcbEventStore
       end
     end
 
-    private_class_method :read_events, :read_group, :combined, :fold, :compile_criteria, :partition_events,
-                         :matches_any_item?
+    private_class_method :read_events, :merge_reads, :read_group, :combined, :fold, :compile_criteria,
+                         :partition_events, :matches_any_item?
   end
 end
 

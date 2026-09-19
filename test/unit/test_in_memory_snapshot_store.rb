@@ -88,4 +88,56 @@ class TestInMemorySnapshotStore < Minitest::Test
     assert_equal 20, entry.position
     assert_equal({ n: 20 }, entry.state)
   end
+
+  # Every operation runs under the store's mutex. A recording stand-in for
+  # the Mutex makes that observable in a single thread: it counts the
+  # synchronize calls and notes whether each block ran to completion (a
+  # `break` out of the block would skip the bookkeeping after the yield).
+  class RecordingMutex
+    attr_reader :calls, :completed
+
+    def initialize
+      @calls = 0
+      @completed = 0
+    end
+
+    def synchronize
+      @calls += 1
+      result = yield
+      @completed += 1
+      result
+    end
+  end
+
+  def with_recording_mutex
+    mutex = RecordingMutex.new
+    @snapshots.instance_variable_set(:@mutex, mutex)
+    yield mutex
+  end
+
+  def test_every_operation_synchronizes_once
+    with_recording_mutex do |mutex|
+      @snapshots.store("k", position: 1, state: 1)
+      @snapshots.fetch("k")
+      @snapshots.fetch_many(["k"])
+      @snapshots.size
+      @snapshots.delete("k")
+      @snapshots.clear
+
+      assert_equal 6, mutex.calls
+      assert_equal 6, mutex.completed
+    end
+  end
+
+  def test_a_store_that_keeps_the_newer_entry_still_completes_its_critical_section
+    @snapshots.store("k", position: 5, state: 5)
+
+    with_recording_mutex do |mutex|
+      @snapshots.store("k", position: 3, state: 3)
+
+      assert_equal 1, mutex.calls
+      assert_equal 1, mutex.completed
+      assert_equal 5, @snapshots.fetch("k").position
+    end
+  end
 end

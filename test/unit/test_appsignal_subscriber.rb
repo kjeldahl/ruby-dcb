@@ -224,6 +224,23 @@ class TestAppsignalSubscriber < Minitest::Test
     assert_equal ["dcb.decision_model.events", 12, {}], @appsignal.distributions.last
   end
 
+  # A build that raised publishes the event without a count: nothing but
+  # the duration and the error are recorded.
+  def test_failed_decision_model_records_no_event_count
+    @subscriber.call(build_event(name: "decision_model.dcb", error: IOError.new("down"),
+                                 payload: {projections: [:a]}))
+
+    assert_equal ["dcb.decision_model.duration"], @appsignal.distributions.map(&:first)
+    assert_equal ["dcb.decision_model.errors"], @appsignal.counters.map(&:first)
+  end
+
+  def test_decision_model_with_zero_events_records_the_zero
+    @subscriber.call(build_event(name: "decision_model.dcb", payload: {projections: [:a], event_count: 0}))
+
+    assert_equal ["dcb.decision_model.duration", "dcb.decision_model.events"], @appsignal.distributions.map(&:first)
+    assert_equal 0, @appsignal.distributions.last[1]
+  end
+
   def test_snapshot_load_counts_hits_and_misses
     @subscriber.call(build_event(name: "snapshot.dcb",
                                  payload: {store: "DcbEventStore::Snapshots::PostgresSnapshotStore",

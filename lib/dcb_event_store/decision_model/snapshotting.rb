@@ -40,19 +40,17 @@ module DcbEventStore
       def self.store(snapshots, projections, folded)
         return 0 unless folded.max_position
 
-        projections.count do |name, proj|
-          next false unless due?(proj.snapshot, folded.entries[name], folded.max_position)
-
-          folded_count = folded.events_by_projection[name].size
-
+        due = projections.select { |name, proj| due?(proj.snapshot, folded.entries[name], folded.max_position) }
+        due.each do |name, proj|
           payload = { store: snapshots.class.name, operation: :write, projection: name,
-                      key: proj.snapshot.key(proj.query), position: folded.max_position, folded_count: folded_count }
+                      key: proj.snapshot.key(proj.query), position: folded.max_position,
+                      folded_count: folded.events_by_projection[name].size }
           DcbEventStore.instrumentation.instrument(StoreInstrumentation::SNAPSHOT_EVENT, payload) do
             state = proj.snapshot.dump(folded.states.fetch(name))
             snapshots.store(payload[:key], position: folded.max_position, state: state)
           end
-          true
         end
+        due.size
       end
 
       # A snapshot is due when the projection has none yet, or when the

@@ -43,14 +43,14 @@ module DcbEventStore
       def tags_contain(params, tags, after: nil)
         wanted = tags.uniq
         params << encode_list(wanted)
-        bound = ""
+        conditions = ["tag IN (SELECT value FROM json_each(?))"]
         if after
           params << after
-          bound = "AND sequence_position > ? "
+          conditions << "sequence_position > ?"
         end
         params << wanted.size
         "sequence_position IN (SELECT sequence_position FROM event_tags " \
-          "WHERE tag IN (SELECT value FROM json_each(?)) #{bound}" \
+          "WHERE #{conditions.join(' AND ')} " \
           "GROUP BY sequence_position HAVING COUNT(*) = ?)"
       end
 
