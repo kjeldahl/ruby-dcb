@@ -36,6 +36,11 @@ module DcbEventStore
     APPEND_EVENT = "append.dcb".freeze
     READ_EVENT = "read.dcb".freeze
     SUBSCRIBE_EVENT = "subscribe.dcb".freeze
+    # Emitted by DecisionModel around its snapshot store calls (operation:
+    # :load once per build, :write once per snapshot written) and by
+    # MaterializedStreams per read served; see those classes for payloads.
+    SNAPSHOT_EVENT = "snapshot.dcb".freeze
+    STREAM_EVENT = "stream.dcb".freeze
     SUBSCRIBE_MODES = %i[event batch].freeze
 
     private

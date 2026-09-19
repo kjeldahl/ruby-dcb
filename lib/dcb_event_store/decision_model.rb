@@ -1,6 +1,7 @@
 module DcbEventStore
   module DecisionModel
     Result = Data.define(:states, :append_condition)
+    EVENT = "decision_model.dcb".freeze
 
     # What one build folded: the snapshot entries it started from (by
     # projection name), the events each projection folded, the resulting
@@ -23,8 +24,8 @@ module DcbEventStore
     # condition guards, so the states they hold are exactly the states this
     # build returned.
     def self.build(store, snapshots: nil, **projections)
-      DcbEventStore.instrumentation.instrument("decision_model.dcb", projections: projections.keys) do |payload|
-        entries = load_snapshots(snapshots, projections)
+      DcbEventStore.instrumentation.instrument(EVENT, projections: projections.keys) do |payload|
+        entries = Snapshotting.load(snapshots, projections)
         events = read_events(store, projections, entries)
         folded = fold(projections, events, entries)
 
@@ -32,29 +33,12 @@ module DcbEventStore
         payload[:last_position] = folded.max_position
         if snapshots
           payload[:snapshots_loaded] = entries.size
-          payload[:snapshots_written] = store_snapshots(snapshots, projections, folded)
+          payload[:snapshots_written] = Snapshotting.store(snapshots, projections, folded)
         end
 
         condition = AppendCondition.new(fail_if_events_match: combined(projections), after: folded.max_position)
         Result.new(states: folded.states, append_condition: condition)
       end
-    end
-
-    # name => Snapshot::Entry for every projection that has a snapshot
-    # configured and stored; one round trip to the snapshot store.
-    def self.load_snapshots(snapshots, projections)
-      return {} unless snapshots
-
-      keys = projections.filter_map { |name, proj| [name, proj.snapshot.key(proj.query)] if proj.snapshot }
-      return {} if keys.empty?
-
-      found = snapshots.fetch_many(keys.map(&:last))
-      keys.filter_map do |name, key|
-        entry = found[key]
-        next unless entry
-
-        [name, Snapshot::Entry.new(position: entry.position, state: projections.fetch(name).snapshot.load(entry.state))]
-      end.to_h
     end
 
     # One read per distinct snapshot position (nil for the projections
@@ -92,30 +76,6 @@ module DcbEventStore
       end
       Folded.new(entries: entries, events_by_projection: events_by_projection, states: states,
                  max_position: max_position)
-    end
-
-    # Writes the snapshots that are due and returns how many.
-    def self.store_snapshots(snapshots, projections, folded)
-      return 0 unless folded.max_position
-
-      projections.count do |name, proj|
-        next false unless snapshot_due?(proj.snapshot, folded.entries[name], folded.events_by_projection[name].size,
-                                        folded.max_position)
-
-        state = proj.snapshot.dump(folded.states.fetch(name))
-        snapshots.store(proj.snapshot.key(proj.query), position: folded.max_position, state: state)
-        true
-      end
-    end
-
-    # A snapshot is due when the projection has none yet, or when this build
-    # folded at least +every+ events on top of it and there is a newer
-    # position to record.
-    def self.snapshot_due?(snapshot, entry, folded_count, max_position)
-      return false unless snapshot
-      return true if entry.nil?
-
-      folded_count >= snapshot.every && entry.position < max_position
     end
 
     def self.compile_criteria(projections)
@@ -157,7 +117,9 @@ module DcbEventStore
       end
     end
 
-    private_class_method :load_snapshots, :read_events, :read_group, :combined, :fold, :store_snapshots,
-                         :snapshot_due?, :compile_criteria, :partition_events, :matches_any_item?
+    private_class_method :read_events, :read_group, :combined, :fold, :compile_criteria, :partition_events,
+                         :matches_any_item?
   end
 end
+
+require_relative "decision_model/snapshotting"

@@ -187,7 +187,7 @@ result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
 )
 ```
 
-- The snapshot **key** is `name`, `version` and the projection's query (which carries the entity's tags), so one `Snapshot` configuration serves every instance of a projection and each entity gets its own snapshot. Bump `version` whenever the handlers change; old snapshots are then never read again.
+- The snapshot **key** is `name`, `version` and the projection's query (`Query#fingerprint`, a JSON rendering of its items that carries the entity's tags), so one `Snapshot` configuration serves every instance of a projection and each entity gets its own snapshot. Bump `version` whenever the handlers change; old snapshots are then never read again.
 - `every:` is the write policy: a snapshot is written the first time a projection is built and thereafter once a build had to fold at least `every` events on top of it. It is written at the position of the returned append condition, so the stored state is exactly the state the build returned.
 - `DecisionModel.build` groups projections by snapshot position and issues one read per group (projections without a snapshot read from the start of the log, but only their own query), so a projection over a brand-new entity does not force the others to replay. The append condition is unchanged: it guards the union of all queries after the highest position any state was folded through.
 - State is stored as JSON by the SQL stores, so JSON-compatible states (numbers, strings, booleans, arrays, symbol-keyed hashes) round-trip as they are; anything else takes `dump:`/`load:` lambdas on the `Snapshot`.
@@ -270,10 +270,14 @@ Emitted events and payloads:
 | `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
 | `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
-| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:` |
+| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
+| `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
+| `stream.dcb` | `MaterializedStreams#read`/`#read_from` | `store:`, `query:`, `after:`, `streams:` (items), `hits:`, `misses:`, `fetched_count:` (events pulled from the store), `event_count:` (served), `evicted:` |
 | `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
+
+`event_count` on `decision_model.dcb` is the number snapshots exist to hold down: with snapshots working it stays flat as a projection's history grows, and `snapshot.dcb`'s `requested:`/`loaded:` give the hit rate. `stream.dcb`'s `fetched_count:` against `event_count:` shows how much of a materialized stream came from memory; the wrapped store's own `read.dcb` events still fire for what reached the database.
 
 Reads are lazy enumerators, so `read.dcb` fires when the enumeration finishes (completing or exiting early via `break`/`#first`), with `event_count` reflecting the events actually yielded. Whether a read is instrumented is decided when the read is issued, and an abandoned external iterator (`#next` without exhausting) publishes nothing.
 
@@ -396,6 +400,13 @@ DcbEventStore::AppsignalSubscriber.new.attach_to
 | `dcb.append.conflicts` | counter | `ConditionNotMet` failures — the consistency-boundary conflict rate |
 | `dcb.subscribe.delivered` | counter | events delivered to subscribers, tagged `phase=live/catch_up` |
 | `dcb.subscribe.lag` | distribution (ms) | live delivery lag — the staleness signal; alert on its p95/p99 |
+| `dcb.decision_model.events` | distribution | events read per build — flat when snapshots work, growing when they do not |
+| `dcb.snapshot.hits` / `dcb.snapshot.misses` | counter | snapshots found / missing on load (hit rate) |
+| `dcb.snapshot.writes` | counter | snapshots written |
+| `dcb.snapshot.folded` | distribution | events folded on top of a snapshot before it was rewritten (tune `every:`) |
+| `dcb.stream.hits` / `dcb.stream.misses` | counter | materialized streams already held / built from a full read |
+| `dcb.stream.fetched` | counter | events pulled from the store into materialized streams |
+| `dcb.stream.evicted` | counter | streams dropped to stay within `max_streams`/`max_events` |
 
 Metrics are tagged with the emitting store (`store=PostgresStore` / `store=SqliteStore` / `store=InMemoryStore`). The adapter encodes the gem's semantics: delivery lag is recorded **only for the `:live` phase** (catch-up replays history, where large lag is expected and would poison the staleness signal), and comes from `lag:` or `max_lag:` depending on the store's `subscribe_instrumentation:` mode.
 

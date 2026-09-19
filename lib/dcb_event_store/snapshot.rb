@@ -9,8 +9,9 @@ module DcbEventStore
   # decision stops growing with the length of the projection's history.
   #
   # The snapshot key combines +name+, +version+ and the projection's query
-  # (which carries the entity tags), so one configuration serves every
-  # instance of a projection and each entity gets its own snapshot. Bump
+  # (its Query#fingerprint, which carries the entity tags), so one
+  # configuration serves every instance of a projection and each entity gets
+  # its own snapshot. Bump
   # +version+ whenever the handlers change: the old snapshots are then simply
   # never read again.
   #
@@ -39,7 +40,7 @@ module DcbEventStore
     end
 
     def key(query)
-      "#{@name}/v#{@version}/#{query}"
+      "#{@name}/v#{@version}/#{query.fingerprint}"
     end
 
     def dump(state) = @dump.call(state)

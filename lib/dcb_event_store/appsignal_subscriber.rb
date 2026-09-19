@@ -8,6 +8,19 @@ module DcbEventStore
   #   dcb.append.conflicts       counter            ConditionNotMet failures
   #   dcb.subscribe.delivered    counter            deliveries, tagged by phase
   #   dcb.subscribe.lag          distribution (ms)  live delivery lag
+  #   dcb.decision_model.events  distribution       events read per build
+  #   dcb.snapshot.hits          counter            snapshots found on load
+  #   dcb.snapshot.misses        counter            snapshots asked for but missing
+  #   dcb.snapshot.writes        counter            snapshots written
+  #   dcb.snapshot.folded        distribution       events folded on top of a snapshot before it was rewritten
+  #   dcb.stream.hits            counter            materialized streams already held
+  #   dcb.stream.misses          counter            materialized streams built from a full read
+  #   dcb.stream.fetched         counter            events pulled from the store into streams
+  #   dcb.stream.evicted         counter            streams dropped to stay within limits
+  #
+  # dcb.decision_model.events is the number the snapshots exist to hold
+  # down: with snapshots working it stays flat as a projection's history
+  # grows. The snapshot and stream counters give hit rates.
   #
   # Metrics are tagged with the emitting store (demodulized, e.g.
   # store=PostgresStore); dcb.subscribe.delivered additionally carries
@@ -53,6 +66,9 @@ module DcbEventStore
       case event.name
       when StoreInstrumentation::APPEND_EVENT then record_append(event, tags)
       when StoreInstrumentation::SUBSCRIBE_EVENT then record_subscribe(event, tags)
+      when StoreInstrumentation::SNAPSHOT_EVENT then record_snapshot(event, tags)
+      when StoreInstrumentation::STREAM_EVENT then record_stream(event, tags)
+      when DecisionModel::EVENT then record_decision_model(event, tags)
       end
     end
 
@@ -92,6 +108,40 @@ module DcbEventStore
 
       lag = event.payload[:lag] || event.payload[:max_lag]
       appsignal.add_distribution_value(metric("subscribe", "lag"), lag * 1000, tags) if phase == :live && lag
+    end
+
+    def record_decision_model(event, tags)
+      count = event.payload[:event_count]
+      appsignal.add_distribution_value(metric("decision_model", "events"), count, tags) if count
+    end
+
+    # A failed load or write reports nothing but the error counter: the
+    # payload's counts are only filled in on completion.
+    def record_snapshot(event, tags)
+      payload = event.payload
+      case payload[:operation]
+      when :load
+        loaded = payload[:loaded] or return
+        counter(metric("snapshot", "hits"), loaded, tags)
+        counter(metric("snapshot", "misses"), payload.fetch(:requested) - loaded, tags)
+      when :write
+        return if event.error
+
+        counter(metric("snapshot", "writes"), 1, tags)
+        appsignal.add_distribution_value(metric("snapshot", "folded"), payload.fetch(:folded_count), tags)
+      end
+    end
+
+    def record_stream(event, tags)
+      payload = event.payload
+      return unless payload.key?(:hits)
+
+      %i[hits misses evicted].each { |name| counter(metric("stream", name.to_s), payload.fetch(name), tags) }
+      counter(metric("stream", "fetched"), payload.fetch(:fetched_count), tags)
+    end
+
+    def counter(name, value, tags)
+      appsignal.increment_counter(name, value, tags) if value.positive?
     end
   end
 end

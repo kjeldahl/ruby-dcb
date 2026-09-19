@@ -1,3 +1,5 @@
+require "json"
+
 module DcbEventStore
   QueryItem = Data.define(:event_types, :tags) do
     def initialize(event_types:, tags: [])
@@ -30,6 +32,13 @@ module DcbEventStore
 
     def ==(other)
       other.instance_of?(Query) && other.items == @items
+    end
+
+    # An unambiguous identity for caching, unlike #to_s: the items as a JSON
+    # array of [event_types, tags] pairs, so a tag containing "," or "{"
+    # cannot make two different queries read alike ("[]" for Query.all).
+    def fingerprint
+      JSON.generate(@items.map { |item| [item.event_types, item.tags] })
     end
 
     # "Query.all" when unbounded, else "Query[itemA|itemB]" with items
