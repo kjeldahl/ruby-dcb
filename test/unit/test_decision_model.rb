@@ -76,4 +76,18 @@ class TestDecisionModelUnit < Minitest::Test
     assert_equal DcbEventStore::Query.all, result.append_condition.fail_if_events_match
     assert_equal appended.last.sequence_position, result.append_condition.after
   end
+
+  # Without a snapshot store the build does not consult the log head: the
+  # condition stops at the last matching event, and an unrelated event
+  # appended after it is not guarded (nor paid for with an extra query).
+  def test_without_snapshots_after_is_the_last_matching_event_not_the_head
+    matching = @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])]).last
+    @store.append([DcbEventStore::Event.new(type: "Unrelated", tags: ["t:9"])])
+    proj = projection(event_types: ["A"], tags: ["t:1"], handlers: { "A" => ->(s, _e) { s + 1 } })
+
+    result = DcbEventStore::DecisionModel.build(@store, p: proj)
+
+    assert_equal matching.sequence_position, result.append_condition.after
+    refute_equal @store.last_position, result.append_condition.after
+  end
 end

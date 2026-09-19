@@ -124,7 +124,7 @@ milliseconds. "warm" = the snapshot or stream already exists.
 
 ### DecisionModel.build, SQLite (100k events)
 
-| stream | baseline | snapshot cold | snapshots (db) warm | snapshots (memory) warm | materialized warm | speedup (db) |
+| stream | baseline | snapshot cold | snapshots (db) warm | snapshots (memory) warm | materialized warm (spike) | speedup (db) |
 |---:|---:|---:|---:|---:|---:|---:|
 | 10 | 0.92 | 1.20 | 0.52 | 0.46 | 0.60 | 1.8x |
 | 100 | 3.56 | 3.96 | 0.51 | 0.49 | 1.24 | 6.9x |
@@ -133,38 +133,42 @@ milliseconds. "warm" = the snapshot or stream already exists.
 
 ### DecisionModel.build, PostgreSQL (100k events)
 
-| stream | baseline | snapshot cold | snapshots (db) warm | snapshots (memory) warm | materialized warm | speedup (db) |
+| stream | baseline | snapshot cold | snapshots (db) warm | snapshots (memory) warm | materialized warm (spike) | speedup (db) |
 |---:|---:|---:|---:|---:|---:|---:|
-| 10 | 4.11 | 5.07 | 7.46 * | 7.23 * | 6.62 | 0.6x |
-| 100 | 6.65 | 7.99 | 7.45 * | 9.13 * | 7.17 | 0.9x |
-| 1,000 | 39.95 | 40.95 | 6.74 * | 8.78 * | 12.67 | 5.9x |
-| 10,000 | 347.27 | 415.75 | 0.55 | 0.59 | 74.36 | 637x |
+| 10 | 4.16 | 5.46 | 0.65 | 0.51 | 6.62 | 6.4x |
+| 100 | 6.90 | 8.26 | 0.65 | 0.56 | 7.17 | 10.6x |
+| 1,000 | 39.33 | 40.28 | 0.66 | 0.52 | 12.67 | 60x |
+| 10,000 | 340.77 | 322.33 | 0.72 | 0.54 | 74.36 | 476x |
 
-### DecisionModel.build, PostgreSQL (500k events)
+### DecisionModel.build, PostgreSQL (500k events, spike policy)
 
-| stream | baseline | snapshot cold | snapshots (db) warm | snapshots (memory) warm | materialized warm | speedup (db) |
+Measured before the write policy was changed to follow the log head (§3.1);
+the warm cells for the smaller courses are the cost of that old policy, not
+of the snapshot.
+
+| stream | baseline | snapshot cold | snapshots (db) warm | snapshots (memory) warm | materialized warm (spike) | speedup (db) |
 |---:|---:|---:|---:|---:|---:|---:|
 | 10 | 6.41 | 7.50 | 7.45 * | 7.31 * | 6.71 | 0.9x |
 | 100 | 9.08 | 10.26 | 7.69 * | 9.30 * | 7.70 | 1.2x |
 | 1,000 | 45.83 | 45.63 | 6.88 * | 8.95 * | 14.33 | 6.7x |
 | 10,000 | 338.56 | 339.54 | 0.59 | 3.93 | 76.74 | 573x |
 
-\* See "PostgreSQL: stale statistics" below — these cells are the cost of a
-catch-up read while the planner's statistics predate the events appended after
-the snapshot, not of the snapshot itself; re-measured after `ANALYZE` the same
-builds take ~1 ms (see §3.1).
+\* See §3.1: a catch-up read walking the primary key past the events
+appended after the snapshot, while the planner's statistics predate them.
+With snapshots that follow the head (the shipped policy) the same builds
+take ~0.65 ms, as in the 100k table.
 
 ### The write loop: build + append with condition, per operation
 
 What an application does: build the decision model, append one event under
 its condition, next student. p50 / p99 in ms, 30 operations.
 
-| backend, course | baseline | snapshots every: 1 | every: 10 | every: 100 | materialized |
+| backend, course | baseline | snapshots every: 1 | every: 10 | every: 100 | materialized (spike) |
 |---|---:|---:|---:|---:|---:|
-| SQLite, 1,000 subs | 31.8 / 55.5 | 1.6 / 2.6 | 1.8 / 8.9 | 2.1 / 3.0 | 9.7 / 17.5 |
-| SQLite, 10,000 subs | 403.0 / 416.4 | 3.2 / 4.0 | 3.5 / 11.8 | 3.8 / 6.4 | 83.5 / 91.9 |
-| PostgreSQL 100k, 1,000 subs | 33.9 / 40.0 | 2.4 / 3.5 | 2.5 / 3.6 | 3.1 / 4.5 | 9.5 / 12.0 |
-| PostgreSQL 100k, 10,000 subs | 430.4 / 456.7 | 2.4 / 7.6 | 2.4 / 7.7 | 2.9 / 8.3 | 76.6 / 82.0 |
+| SQLite, 1,000 subs | 33.2 / 38.8 | 1.6 / 2.6 | 1.8 / 9.8 | 2.1 / 2.9 | 9.7 / 17.5 |
+| SQLite, 10,000 subs | 414.5 / 445.6 | 3.2 / 4.0 | 3.4 / 5.3 | 3.8 / 10.9 | 83.5 / 91.9 |
+| PostgreSQL 100k, 1,000 subs | 44.9 / 52.2 | 5.2 / 7.0 | 5.3 / 6.5 | 5.0 / 6.8 | 9.5 / 12.0 |
+| PostgreSQL 100k, 10,000 subs | 411.0 / 438.0 | 2.6 / 4.0 | 2.5 / 4.1 | 3.1 / 6.6 | 76.6 / 82.0 |
 | PostgreSQL 500k, 1,000 subs | 45.9 / 50.1 | 4.5 / 6.6 | 4.5 / 6.8 | 4.9 / 7.4 | 13.0 / 16.1 |
 | PostgreSQL 500k, 10,000 subs | 346.9 / 365.4 | 4.6 / 6.1 | 4.7 / 5.7 | 5.1 / 6.3 | 79.7 / 96.2 |
 
@@ -178,7 +182,8 @@ Two things the write loop shows that the read tables cannot:
 - `every:` barely matters at p50 — a snapshot write is one upsert — and shows
   up only as the occasional p99 spike when a rewrite happens. `every: 1`
   keeps the catch-up read shortest and is the right default for decision
-  models; a larger value only trades write volume for fold work.
+  models; a larger value only trades write volume for a longer catch-up
+  read.
 
 ### 3.1 PostgreSQL: stale statistics and the catch-up read
 
@@ -198,16 +203,21 @@ same database:
 | 10,000 unrelated events appended after P, statistics stale | primary key, 10,000 rows filtered | 5.37 ms |
 | same, after `ANALYZE events` | GIN bitmap | 1.87 ms |
 
-The 10,000-subscription rows in the tables above are unaffected only because
-that course was seeded last, so nothing followed its snapshot. In steady state
-autoanalyze re-plans after every `autovacuum_analyze_scale_factor` (10%) of
-growth, which bounds the walk at ~10% of the table — about 5 ms per 100k
-events, or ~250 ms on a 5M-event table right before an autoanalyze. Two
-mitigations, both outside this gem's SQL: lower the threshold on the table
-(`ALTER TABLE events SET (autovacuum_analyze_scale_factor = 0.01)`), and keep
-snapshots fresh (`every: 1`) so the walk starts as late as possible. SQLite
-has no equivalent: its tag subquery carries the position bound (§1) and the
-catch-up read stays at 0.08 ms whatever follows the snapshot.
+In the spike, a snapshot only moved when the projection folded new events,
+so an idle entity's snapshot sat where it was while the log grew past it —
+which is what the starred cells show. The shipped policy takes the store's
+`last_position` before the reads and rewrites a snapshot once the head is
+`every` positions past it, so a catch-up read starts at (or near) the head
+and walks nothing; the 100k PostgreSQL table above was measured that way and
+is flat at ~0.65 ms. The planner effect itself remains for an entity that is
+not rebuilt for a long time: in steady state autoanalyze re-plans after every
+`autovacuum_analyze_scale_factor` (10%) of growth, which bounds the walk at
+~10% of the table — about 5 ms per 100k events, or ~250 ms on a 5M-event
+table right before an autoanalyze. Lower the threshold on the table
+(`ALTER TABLE events SET (autovacuum_analyze_scale_factor = 0.01)`) to bound
+it tighter. SQLite has no equivalent: its tag subquery carries the position
+bound (§1) and the catch-up read stays at 0.08 ms whatever follows the
+snapshot.
 
 The same statistics effect explains why PostgreSQL's baseline for the small
 courses is 4–7 ms while SQLite's is under 1 ms: each build is at least one
@@ -221,12 +231,12 @@ catch-up read").
 **Snapshots are worth shipping; materialized streams are not.**
 
 - Snapshots turn a decision model's cost from O(history) into O(new events):
-  the write loop on a 10,000-event course goes from 350–430 ms to 2–5 ms on
-  both backends (100–150x), and the read-only build from 340–400 ms to ~0.6 ms.
-  The crossover is small: from ~100 events per projection on SQLite and
-  ~500–1,000 on PostgreSQL the snapshot path wins, below that it costs the
-  same as the replay (one extra small query). The first build pays the replay
-  it would have paid anyway plus one upsert per projection.
+  the write loop on a 10,000-event course goes from 410 ms to 2–5 ms on both
+  backends (100–150x), and the read-only build from 340–410 ms to ~0.6 ms.
+  Even the 10-event course is 2x (SQLite) to 6x (PostgreSQL) faster warm,
+  since a build becomes one snapshot fetch plus one empty read. The first
+  build pays the replay it would have paid anyway plus one upsert per
+  projection.
 - Materialized streams remove the database and decoding work but not the
   fold and partition (~8 µs per event in Ruby): 4–5x at every size, still
   linear, per process, memory-bound, and their per-entity cache misses in
