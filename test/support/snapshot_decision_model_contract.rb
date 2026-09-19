@@ -306,11 +306,49 @@ module SnapshotDecisionModelContract
     position = snapshots.fetch(key).position
     snapshots.store(key, position: position + 100, state: 41)
 
-    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
+    result = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
 
     entry = snapshots.fetch(key)
     assert_equal position + 100, entry.position
     assert_equal 41, entry.state
+    # ...and the condition guards up to it: the state is the state at that
+    # position, wherever the log head is.
+    assert_equal position + 100, result.append_condition.after
+  end
+
+  # Two groups' reads can interleave: the snapshotless group's read (from
+  # the start) is merged before the snapshotted group's read (after its
+  # position), and an event both reads return is kept once. The merged
+  # stream must still be in sequence order, or a projection folding events
+  # from both reads sees them out of order.
+  def test_merged_reads_fold_in_sequence_order
+    order = DcbEventStore::Projection.new(
+      initial_state: [],
+      handlers: { "Y" => ->(positions, e) { positions + [e.sequence_position] } },
+      query: DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Y"], tags: ["t:2"])]),
+      snapshot: snap_config("order")
+    )
+    any_t1 = DcbEventStore::Projection.new(
+      initial_state: 0, handlers: { "X" => ->(s, _e) { s + 1 }, "Y" => ->(s, _e) { s + 1 } },
+      query: DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+    )
+
+    @store.append([DcbEventStore::Event.new(type: "Y", tags: ["t:2"]),
+                   DcbEventStore::Event.new(type: "Y", tags: ["t:2"])])
+    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, order: order) # snapshot at position 2
+    x3, y4, y5 = @store.append([
+                                 DcbEventStore::Event.new(type: "X", tags: ["t:1"]),
+                                 DcbEventStore::Event.new(type: "Y", tags: ["t:2"]),
+                                 DcbEventStore::Event.new(type: "Y", tags: ["t:1", "t:2"])
+                               ]).map(&:sequence_position)
+
+    # any_t1 reads [x3, y5] from the start; order reads [y4, y5] after 2.
+    result = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, any_t1: any_t1, order: order)
+
+    assert_equal 2, result.states[:any_t1]
+    assert_equal [1, 2, y4, y5], result.states[:order]
+    assert_equal y5, result.append_condition.after
+    assert_equal y5 - 2, x3
   end
 
   # --- loading -------------------------------------------------------------

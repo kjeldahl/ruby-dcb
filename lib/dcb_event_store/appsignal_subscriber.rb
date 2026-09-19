@@ -63,7 +63,7 @@ module DcbEventStore
       when StoreInstrumentation::APPEND_EVENT then record_append(event, tags)
       when StoreInstrumentation::SUBSCRIBE_EVENT then record_subscribe(event, tags)
       when StoreInstrumentation::SNAPSHOT_EVENT then record_snapshot(event, tags)
-      when DecisionModel::EVENT then record_decision_model(event, tags)
+      when DecisionModel::EVENT then record_decision_model(event)
       end
     end
 
@@ -105,9 +105,10 @@ module DcbEventStore
       appsignal.add_distribution_value(metric("subscribe", "lag"), lag * 1000, tags) if phase == :live && lag
     end
 
-    def record_decision_model(event, tags)
+    # decision_model.dcb carries no store:, so the metric has no tags.
+    def record_decision_model(event)
       count = event.payload[:event_count]
-      appsignal.add_distribution_value(metric("decision_model", "events"), count, tags) if count
+      appsignal.add_distribution_value(metric("decision_model", "events"), count) if count
     end
 
     # A failed load or write reports nothing but the error counter: the

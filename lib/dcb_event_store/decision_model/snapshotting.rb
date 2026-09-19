@@ -44,10 +44,10 @@ module DcbEventStore
         due.each do |name, proj|
           payload = { store: snapshots.class.name, operation: :write, projection: name,
                       key: proj.snapshot.key(proj.query), position: folded.max_position,
-                      folded_count: folded.events_by_projection[name].size }
+                      folded_count: folded.events_by_projection.fetch(name).size }
           DcbEventStore.instrumentation.instrument(StoreInstrumentation::SNAPSHOT_EVENT, payload) do
             state = proj.snapshot.dump(folded.states.fetch(name))
-            snapshots.store(payload[:key], position: folded.max_position, state: state)
+            snapshots.store(payload.fetch(:key), position: folded.max_position, state: state)
           end
         end
         due.size
