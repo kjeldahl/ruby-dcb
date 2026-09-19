@@ -53,6 +53,27 @@ a course with N subscriptions, in a table of ~100k events (median of 20):
   takes the 10k-event case from 4.6 ms to 0.08 ms. That change is in this
   branch and benefits every `read_from`, snapshots or not.
 
+### 1.1 The same profile after #41
+
+Re-run of the profile above on this branch rebased on `main`'s
+`SqlStore::Timestamp` (#41): the only change is how `created_at` is decoded.
+
+| backend, N | mapping before → after | full build before → after | mapping share after |
+|---|---:|---:|---:|
+| PostgreSQL, 100 | 2.0 → 0.31 ms | 7.1 → 6.0 ms | 5% |
+| PostgreSQL, 1,000 | 17.4 → 3.6 ms | 32.2 → 17.7 ms | 21% |
+| PostgreSQL, 10,000 | 235.4 → 40.4 ms | 412.0 → 150.3 ms | 27% |
+| SQLite, 100 | 1.5 → 0.28 ms | 2.6 → 1.1 ms | 25% |
+| SQLite, 1,000 | 18.4 → 3.6 ms | 27.0 → 11.1 ms | 33% |
+| SQLite, 10,000 | 218.8 → 45.1 ms | 381.6 → 137.4 ms | 33% |
+
+Row mapping is 5x cheaper (the estimate from the `Time.parse` micro-benchmark
+was 2–3x; the pipeline also stopped building an intermediate string), a full
+replay 1.8–2.8x. SQL fetch and fold are unchanged, so from here the replay
+cost is the database round trip and row transfer, which only snapshots avoid.
+The SQLite empty catch-up read is the flat 0.08 ms of the `after:` bind fix at
+every N.
+
 ## 2. Design
 
 ### Snapshots
