@@ -129,6 +129,20 @@ class TestInMemorySnapshotStore < Minitest::Test
     end
   end
 
+  def test_purges_synchronize_too
+    previous = DcbEventStore::Snapshots.epoch
+    DcbEventStore::Snapshots.epoch = "e"
+    with_recording_mutex do |mutex|
+      @snapshots.purge(name: "k")
+      @snapshots.purge_other_epochs
+
+      assert_equal 2, mutex.calls
+      assert_equal 2, mutex.completed
+    end
+  ensure
+    DcbEventStore::Snapshots.epoch = previous
+  end
+
   def test_a_store_that_keeps_the_newer_entry_still_completes_its_critical_section
     @snapshots.store("k", position: 5, state: 5)
 

@@ -55,7 +55,7 @@ module DcbEventStore
     # the version part when +version+ is nil: what every key of +name+ (at
     # +version+) starts with, which is what the stores' #purge matches on.
     def self.key_prefix(name, version)
-      parts = [Snapshots.epoch, name.to_s]
+      parts = [Snapshots.epoch, name]
       parts << "v#{version}" if version
       "#{parts.compact.join('/')}/"
     end
