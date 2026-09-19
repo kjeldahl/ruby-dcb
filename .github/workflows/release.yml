@@ -1,0 +1,52 @@
+# Tags and releases a version the moment it lands on main: the version
+# constant is the trigger, so a release is one bump commit away and never a
+# manual `git tag`. Idempotent -- re-running on a version that is already
+# tagged is a no-op -- and dispatchable, which is how a version that reached
+# main before this workflow existed gets its tag.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ["lib/dcb_event_store/version.rb"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+
+      # The gemspec reads DcbEventStore::VERSION, so this is the one number.
+      - id: version
+        run: |
+          version=$(ruby -Ilib -e 'require "dcb_event_store/version"; print DcbEventStore::VERSION')
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release, unless the tag is already there
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG is already tagged, nothing to release."
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes

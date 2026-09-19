@@ -1,6 +1,11 @@
+# One source for the version: the constant the library itself exposes, so a
+# bump is a one-line change and the gem can never ship a number that
+# disagrees with DcbEventStore::VERSION.
+require_relative "lib/dcb_event_store/version"
+
 Gem::Specification.new do |s|
   s.name        = "dcb_event_store"
-  s.version     = "0.2.0"
+  s.version     = DcbEventStore::VERSION
   s.summary     = "DCB-compliant event store backed by PostgreSQL or SQLite"
   s.authors     = ["Jacob"]
   s.files       = Dir["lib/**/*.rb"]
