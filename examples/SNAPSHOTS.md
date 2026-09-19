@@ -230,13 +230,37 @@ per-entity snapshots are loaded in one query, so a warm build on current
 statistics is ~1 ms on PostgreSQL versus 0.5 ms on SQLite (§1, "empty
 catch-up read").
 
+### 3.2 Re-run on top of the faster row decoding (#41)
+
+Same script, same machine, after rebasing on `main`'s `SqlStore::Timestamp`
+(30 iterations). Replay is 1.6–2x cheaper than in the tables above; the
+snapshot path is unchanged, so the ratio narrows but stays two orders of
+magnitude on long streams.
+
+| build, course w/ N subs | baseline | snapshots (db) warm | speedup |
+|---|---:|---:|---:|
+| SQLite, 10 | 0.73 | 0.56 | 1.3x |
+| SQLite, 1,000 | 16.11 | 0.54 | 30x |
+| SQLite, 10,000 | 255.54 | 0.59 | 431x |
+| PostgreSQL, 10 | 3.87 | 0.72 | 5.4x |
+| PostgreSQL, 1,000 | 25.63 | 0.68 | 38x |
+| PostgreSQL, 10,000 | 179.13 | 0.71 | 253x |
+
+| write loop, course w/ N subs (p50 / p99) | baseline | every: 1 | every: 10 | every: 100 |
+|---|---:|---:|---:|---:|
+| SQLite, 1,000 | 16.0 / 24.0 | 1.5 / 2.0 | 1.5 / 2.2 | 1.7 / 2.6 |
+| SQLite, 10,000 | 251.6 / 330.9 | 3.2 / 3.8 | 3.2 / 6.1 | 3.4 / 10.4 |
+| PostgreSQL, 1,000 | 25.4 / 32.0 | 4.6 / 6.1 | 4.8 / 7.2 | 4.7 / 5.7 |
+| PostgreSQL, 10,000 | 179.6 / 187.4 | 4.7 / 5.5 | 4.6 / 6.1 | 4.5 / 7.3 |
+
 ## 4. Verdict
 
 **Snapshots are worth shipping; materialized streams are not.**
 
 - Snapshots turn a decision model's cost from O(history) into O(new events):
-  the write loop on a 10,000-event course goes from 410 ms to 2–5 ms on both
-  backends (100–150x), and the read-only build from 340–410 ms to ~0.6 ms.
+  the write loop on a 10,000-event course goes from 180–250 ms (after #41)
+  to 3–5 ms on both backends (50–80x), and the read-only build from
+  180–255 ms to ~0.6 ms.
   Even the 10-event course is 2x (SQLite) to 6x (PostgreSQL) faster warm,
   since a build becomes one snapshot fetch plus one empty read. The first
   build pays the replay it would have paid anyway plus one upsert per
