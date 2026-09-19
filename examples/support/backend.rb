@@ -12,8 +12,9 @@
 #   DCB_BACKEND=memory ruby examples/course_subscriptions.rb
 #
 # Every session starts from an empty store: PostgreSQL truncates the shared
-# test database (or the one named by DCB_PG_DBNAME), SQLite gets a throwaway file under Dir.tmpdir (override with
-# DCB_SQLITE_PATH), and InMemoryStore is empty by construction.
+# test database (or the one named by DCB_PG_DBNAME), SQLite gets a throwaway
+# file under Dir.tmpdir (override with DCB_SQLITE_PATH), and InMemoryStore is
+# empty by construction.
 #
 # Usage:
 #
