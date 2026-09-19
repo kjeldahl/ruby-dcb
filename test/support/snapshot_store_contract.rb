@@ -141,7 +141,10 @@ module SnapshotStoreContract
   # contain brackets, braces, commas, slashes and non-ASCII characters.
   def test_keys_built_from_a_query_round_trip
     query = DcbEventStore::Query.new([
-                                       DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["course:c1", "student:s'1"])
+                                       DcbEventStore::QueryItem.new(event_types: %w[A B],
+                                                                    tags: [
+                                                                      "course:c1", "student:s'1"
+                                                                    ])
                                      ])
     key = DcbEventStore::Snapshot.new(name: "café/subs").key(query)
 

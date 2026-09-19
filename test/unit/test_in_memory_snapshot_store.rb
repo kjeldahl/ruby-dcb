@@ -65,7 +65,7 @@ class TestInMemorySnapshotStore < Minitest::Test
     snapshot = DcbEventStore::Snapshot.new(
       name: "isolated",
       dump: ->(state) { Marshal.dump(state) },
-      load: ->(dumped) { Marshal.load(dumped) }
+      load: ->(dumped) { Marshal.load(dumped) } # rubocop:disable Security/MarshalLoad
     )
 
     state = { n: 1 }

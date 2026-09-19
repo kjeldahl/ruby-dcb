@@ -64,4 +64,16 @@ class TestDecisionModelUnit < Minitest::Test
 
     assert_nil result.append_condition.after
   end
+
+  # No projections: the union of no queries is Query.all, so the condition
+  # guards the whole log and after is its last position.
+  def test_without_projections_the_condition_guards_the_whole_log
+    appended = @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+
+    result = DcbEventStore::DecisionModel.build(@store)
+
+    assert_empty result.states
+    assert_equal DcbEventStore::Query.all, result.append_condition.fail_if_events_match
+    assert_equal appended.last.sequence_position, result.append_condition.after
+  end
 end

@@ -128,8 +128,8 @@ class TestSnapshot < Minitest::Test
   def test_dump_and_load_use_the_supplied_pair
     snapshot = DcbEventStore::Snapshot.new(
       name: "count",
-      dump: ->(state) { state.to_a },
-      load: ->(pairs) { pairs.to_h }
+      dump: :to_a.to_proc,
+      load: :to_h.to_proc
     )
 
     assert_equal [[:n, 1]], snapshot.dump({ n: 1 })

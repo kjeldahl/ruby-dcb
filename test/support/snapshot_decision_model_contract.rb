@@ -232,6 +232,35 @@ module SnapshotDecisionModelContract
     assert_equal last.last.sequence_position, entry.position
     assert_equal 4, entry.state
     assert_equal 4, result.states[:a]
+
+    # More than +every+ events on top rewrites it just the same: the policy
+    # is a floor, not an exact count.
+    4.times { snap_append("Increment", "counter:a") }
+    latest = snap_append("Increment", "counter:a")
+    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
+
+    entry = snapshots.fetch(key)
+    assert_equal latest.last.sequence_position, entry.position
+    assert_equal 9, entry.state
+  end
+
+  # Two projections over the same events, one snapshotted and one not. The
+  # snapshotless group reads from the start of the log, so the snapshotted
+  # projection is handed events its snapshot already covers and must skip
+  # every one of them, not only the one sitting exactly at its position.
+  def test_a_snapshotted_projection_skips_every_event_its_snapshot_covers
+    2.times { snap_append("Increment", "counter:a") }
+    a = snap_counter("counter:a", snapshot: snap_config("a"))
+    b = snap_counter("counter:a", snapshot: snap_config("b"))
+
+    first = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: a)
+    assert_equal 2, first.states[:a]
+
+    result = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: a, b: b)
+
+    assert_equal 2, result.states[:a], "events below the snapshot position were folded twice"
+    assert_equal 2, result.states[:b]
+    assert_equal first.append_condition.after, result.append_condition.after
   end
 
   # A snapshot already at (or past) the position this build guards is left
@@ -426,11 +455,14 @@ module SnapshotDecisionModelContract
       name: "mutating",
       # Base64 so the dumped state is a plain JSON string for the SQL stores.
       dump: ->(state) { [Marshal.dump(state)].pack("m0") },
-      load: ->(packed) { Marshal.load(packed.unpack1("m0")) }
+      load: ->(packed) { Marshal.load(packed.unpack1("m0")) } # rubocop:disable Security/MarshalLoad
     )
     proj = DcbEventStore::Projection.new(
       initial_state: { n: 0 },
-      handlers: { "Increment" => ->(state, _e) { state[:n] += 1; state } },
+      handlers: { "Increment" => ->(state, _e) {
+        state[:n] += 1
+        state
+      } },
       query: snap_query("Increment", "counter:a"),
       snapshot: config
     )

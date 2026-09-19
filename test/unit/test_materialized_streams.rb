@@ -8,7 +8,7 @@ require_relative "../test_helper"
 # through, and a DecisionModel built through it agrees with one built on the
 # store), and it actually caches (a repeated read only asks the store for
 # what is new, and streams are evicted least-recently-used).
-class TestMaterializedStreams < Minitest::Test
+class TestMaterializedStreams < Minitest::Test # rubocop:disable Metrics/ClassLength
   cover "DcbEventStore::MaterializedStreams*"
 
   # Counts and records what the decorator asks the wrapped store for.
@@ -35,9 +35,9 @@ class TestMaterializedStreams < Minitest::Test
       @store.append(events, condition)
     end
 
-    def subscribe(query, after: nil, &block)
+    def subscribe(query, after: nil, &)
       @calls << [:subscribe, query.to_s, after]
-      @store.subscribe(query, after: after, &block)
+      @store.subscribe(query, after: after, &)
     end
   end
 

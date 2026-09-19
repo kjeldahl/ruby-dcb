@@ -24,6 +24,7 @@ requires:
   - ./test/unit/test_railtie
   - ./test/unit/test_appsignal_subscriber
   - ./test/unit/test_instrumentation
+  - ./test/unit/test_snapshot_instrumentation
   - ./test/unit/test_postgres_array_codec
   - ./test/unit/test_postgres_dialect
   - ./test/unit/test_sql_builder
@@ -74,6 +75,14 @@ matcher:
     - DcbEventStore::Snapshot*
     - DcbEventStore::Snapshots::InMemorySnapshotStore*
     - DcbEventStore::MaterializedStreams*
+    # Measured: 97.55% over these three plus DecisionModel* (46 of 1885
+    # alive). What survives is equivalent by construction: removing a
+    # @mutex.synchronize (nothing a single-threaded suite can observe),
+    # dropping a fast path that only saves work (DecisionModel.read_events'
+    # single-group read, MaterializedStreams#events_of's single-stream
+    # merge), h[k] -> h.key?(k)/h.fetch(k) on keys that are always present,
+    # Struct.new([]) for Struct.new([], nil), and the max_events: 1_000_000
+    # default, which only a million cached events would pin.
     # Pure collaborators extracted from the stores: SQL building, the PG
     # dialect it is parametrized with, advisory-lock key derivation, the PG
     # array codec and the created_at parser. Fast to mutate (no live PG) and

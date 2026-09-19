@@ -48,7 +48,9 @@ module DcbEventStore
     # read twice and kept once.
     def self.read_events(store, projections, entries)
       groups = projections.group_by { |name, _proj| entries[name]&.position }
-      return read_group(store, projections, nil).to_a if groups.keys == [nil]
+      # No snapshots at all (including no projections: the union is Query.all,
+      # so the condition guards the whole log): one plain read.
+      return read_group(store, projections, nil).to_a if groups.empty? || groups.keys == [nil]
 
       by_position = {}
       groups.each do |position, group|
