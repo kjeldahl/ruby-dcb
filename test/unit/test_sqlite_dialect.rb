@@ -54,6 +54,18 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ["x", '["t1"]', 1], params
   end
 
+  # The position bound is repeated inside the subquery so the index table's
+  # (tag, sequence_position) key limits the scan to the rows past it.
+  def test_tags_contain_with_after_bounds_the_subquery
+    params = []
+    expected = "sequence_position IN (SELECT sequence_position FROM event_tags " \
+               "WHERE tag IN (SELECT value FROM json_each(?)) AND sequence_position > ? " \
+               "GROUP BY sequence_position HAVING COUNT(*) = ?)"
+
+    assert_equal expected, @dialect.tags_contain(params, %w[t1 t2], after: 7)
+    assert_equal ['["t1","t2"]', 7, 2], params
+  end
+
   # The count is compared against the number of distinct tags an event has in
   # the index table, so a repeated tag must not inflate it.
   def test_tags_contain_deduplicates_the_tags

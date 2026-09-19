@@ -34,12 +34,23 @@ module DcbEventStore
       # wanted tags each event has in the index table. The count must be
       # compared against the number of *distinct* tags, so the list is
       # deduplicated before it is bound.
-      def tags_contain(params, tags)
+      #
+      # With +after+, the position bound goes inside the subquery too: the
+      # index table's primary key is (tag, sequence_position), so the scan
+      # covers only the tag's rows past that position instead of all of them
+      # and filtering afterwards — what keeps a catch-up read after a
+      # snapshot cheap however long the tag's history is.
+      def tags_contain(params, tags, after: nil)
         wanted = tags.uniq
         params << encode_list(wanted)
+        bound = ""
+        if after
+          params << after
+          bound = "AND sequence_position > ? "
+        end
         params << wanted.size
         "sequence_position IN (SELECT sequence_position FROM event_tags " \
-          "WHERE tag IN (SELECT value FROM json_each(?)) " \
+          "WHERE tag IN (SELECT value FROM json_each(?)) #{bound}" \
           "GROUP BY sequence_position HAVING COUNT(*) = ?)"
       end
 

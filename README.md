@@ -162,6 +162,45 @@ result.states[:subscriptions]  # => 12
 result.append_condition        # use this when appending
 ```
 
+### Snapshots and materialized streams
+
+A decision model re-reads and re-folds every matching event on every build, so its cost grows with the length of the projection's history — a "popular course" with 10,000 subscriptions costs ~400ms per decision on either backend, nearly all of it row decoding (see `examples/SNAPSHOTS.md` for the measurements). Two opt-in tools cap that:
+
+**Snapshots** store a projection's folded state at a sequence position, so the next build reads only the events after it. A projection opts in with a `Snapshot`, and `DecisionModel.build` takes the store to keep them in:
+
+```ruby
+snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn)   # or SqliteSnapshotStore.new(db)
+DcbEventStore::Snapshots::PostgresSnapshotStore::Schema.create!(conn)  # projection_snapshots table, idempotent
+
+course_subscriptions = DcbEventStore::Projection.new(
+  initial_state: 0,
+  handlers: { "StudentSubscribedToCourse" => ->(count, _e) { count + 1 } },
+  query: DcbEventStore::Query.new([
+    DcbEventStore::QueryItem.new(event_types: ["StudentSubscribedToCourse"], tags: ["course:math-101"])
+  ]),
+  snapshot: DcbEventStore::Snapshot.new(name: "course_subscriptions", version: 1, every: 100)
+)
+
+result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
+  capacity: capacity_projection,             # no snapshot: always folded from the start
+  subscriptions: course_subscriptions        # folded from its snapshot, when one exists
+)
+```
+
+- The snapshot **key** is `name`, `version` and the projection's query (which carries the entity's tags), so one `Snapshot` configuration serves every instance of a projection and each entity gets its own snapshot. Bump `version` whenever the handlers change; old snapshots are then never read again.
+- `every:` is the write policy: a snapshot is written the first time a projection is built and thereafter once a build had to fold at least `every` events on top of it. It is written at the position of the returned append condition, so the stored state is exactly the state the build returned.
+- `DecisionModel.build` groups projections by snapshot position and issues one read per group (projections without a snapshot read from the start of the log, but only their own query), so a projection over a brand-new entity does not force the others to replay. The append condition is unchanged: it guards the union of all queries after the highest position any state was folded through.
+- State is stored as JSON by the SQL stores, so JSON-compatible states (numbers, strings, booleans, arrays, symbol-keyed hashes) round-trip as they are; anything else takes `dump:`/`load:` lambdas on the `Snapshot`.
+- `Snapshots::InMemorySnapshotStore` keeps the states in the process (a warm cache, lost on restart). It stores the very objects the fold produced, so handlers that mutate their state in place need `dump: Marshal.method(:dump), load: Marshal.method(:load)` or must return new objects.
+
+**Materialized streams** are the alternative that keeps no derived state: `MaterializedStreams` wraps a store and keeps the decoded events of every `QueryItem` it has served in the process, asking the store only for the events after the last one it holds. Reads skip the database and the decoding, but the fold still runs over the whole stream, so the cost stays proportional to its length:
+
+```ruby
+store = DcbEventStore::MaterializedStreams.new(DcbEventStore::SqliteStore.new(db), max_streams: 1_000, max_events: 1_000_000)
+```
+
+Both keep the DCB guarantees only as far as a read does: a snapshot position or a materialized stream's last position means "every matching event up to here was visible when it was read", which holds on SQLite and `InMemoryStore` (single writer, positions commit in order) and on PostgreSQL under the same per-tag locking that already protects the append condition.
+
 ### Client (causation/correlation wiring)
 
 `Client` wraps a store and auto-stamps events with `correlation_id` and `causation_id`:
@@ -407,6 +446,7 @@ All examples from [dcb.events](https://dcb.events/examples) are implemented in `
 | `opt_in_token.rb` | Token verification without separate token store |
 | `prevent_record_duplication.rb` | Idempotency tokens via tags |
 | `performance.rb` | Benchmark: seeding, reads, appends, concurrency |
+| `snapshot_benchmark.rb` | Benchmark: decision models with snapshots and materialized streams vs. replay (`examples/SNAPSHOTS.md`) |
 
 Run any example:
 

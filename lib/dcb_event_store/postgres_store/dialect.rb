@@ -29,8 +29,11 @@ module DcbEventStore
         "type = ANY(#{placeholder(params.size)}::text[])"
       end
 
-      # Matches events carrying all of +tags+.
-      def tags_contain(params, tags)
+      # Matches events carrying all of +tags+. +after+ is accepted for
+      # interface parity with the SQLite dialect and not needed here: the GIN
+      # lookup is by tag and the position bound is applied by the outer
+      # clause.
+      def tags_contain(params, tags, after: nil) # rubocop:disable Lint/UnusedMethodArgument
         params << encode_list(tags)
         "tags @> #{placeholder(params.size)}::text[]"
       end

@@ -52,6 +52,14 @@ class TestPostgresDialect < Minitest::Test
     assert_equal ["x", "{t1}"], params
   end
 
+  # The position bound is applied by the outer clause on PostgreSQL, so the
+  # tag clause takes after: and leaves it alone.
+  def test_tags_contain_ignores_after
+    params = []
+    assert_equal "tags @> $1::text[]", @dialect.tags_contain(params, ["t1"], after: 7)
+    assert_equal ["{t1}"], params
+  end
+
   # --- after_clause ---
 
   def test_after_clause_binds_the_position
