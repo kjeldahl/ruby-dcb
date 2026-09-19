@@ -77,6 +77,19 @@ insert + notify ≈ 70ms.
 - **Advisory lock is the throughput ceiling** — by design, single-writer serialization
 - **Near-zero data loss** — 98.9-100% success rate under sustained concurrent load
 
+## A note on the PostgreSQL read numbers above
+
+The PostgreSQL tables above were measured right after the `COPY` seed, before
+any vacuum. A bulk load leaves the GIN index with a large *pending list*
+(`fastupdate`), and every `tags @>` lookup scans it until a vacuum merges it
+into the index: the same 5-event student read costs 4.2 ms before and 0.4 ms
+after `VACUUM` (or `gin_clean_pending_list`) at 100k events. Autovacuum does
+that within minutes on a real deployment, so the seeder now runs
+`VACUUM ANALYZE` (`examples/performance.rb`), and PostgreSQL tag reads measured
+from here on are roughly 10x cheaper than the "Single student" and
+"Student+course intersection" rows above suggest. The snapshot investigation in
+`SNAPSHOTS.md` was measured with the vacuumed seed.
+
 ## PostgreSQL vs SQLite (same machine)
 
 Hardware and versions for this section only: x86_64 Linux container, 4 cores,

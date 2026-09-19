@@ -185,9 +185,13 @@ module Performance
         FOR EACH ROW EXECUTE FUNCTION prevent_event_mutation();
     SQL
 
-    # Analyze for query planner
-    print "  ANALYZE... "
-    _, t = measure { conn.exec("ANALYZE events") }
+    # VACUUM, not just ANALYZE: a bulk load leaves the GIN index with a large
+    # pending list (fastupdate), and every tag lookup scans it until a vacuum
+    # merges it into the index -- ~10x slower tag reads (4.2ms vs 0.4ms for a
+    # 5-event student at 100k events) that autovacuum would remove within
+    # minutes on a real deployment but would otherwise sit in the numbers.
+    print "  VACUUM ANALYZE... "
+    _, t = measure { conn.exec("VACUUM ANALYZE events") }
     puts "(#{t.round(2)}s)"
 
     total
