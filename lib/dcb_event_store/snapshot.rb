@@ -1,3 +1,4 @@
+require "digest"
 require "json"
 
 module DcbEventStore
@@ -11,7 +12,9 @@ module DcbEventStore
   # The snapshot key combines +name+, +version+ and the projection's query
   # (its Query#fingerprint, which carries the entity tags), so one
   # configuration serves every instance of a projection and each entity gets
-  # its own snapshot. Bump
+  # its own snapshot. A fingerprint longer than a SHA-256 hex digest is
+  # replaced by that digest, so a key never grows with the query beyond
+  # "name/vN/" plus 64 characters; short ones stay readable. Bump
   # +version+ whenever the handlers change: the old snapshots are then simply
   # never read again.
   #
@@ -40,9 +43,19 @@ module DcbEventStore
       @load = load || ->(state) { state }
     end
 
+    # Longest fingerprint kept verbatim: the length of a SHA-256 hex digest.
+    DIGEST_LENGTH = 64
+
     def key(query)
-      "#{@name}/v#{@version}/#{query.fingerprint}"
+      "#{@name}/v#{@version}/#{key_part(query.fingerprint)}"
     end
+
+    def key_part(fingerprint)
+      return fingerprint if fingerprint.length <= DIGEST_LENGTH
+
+      Digest::SHA256.hexdigest(fingerprint)
+    end
+    private :key_part
 
     def dump(state) = @dump.call(state)
     def load(state) = @load.call(state)

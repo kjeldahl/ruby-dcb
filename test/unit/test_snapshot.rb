@@ -176,4 +176,37 @@ class TestSnapshot < Minitest::Test
     refute_equal DcbEventStore::Snapshot::Entry.new(position: 1, state: 2),
                  DcbEventStore::Snapshot::Entry.new(position: 2, state: 2)
   end
+
+  # --- long queries are hashed ---
+
+  # One item, type "E", one tag of +tag_length+ characters: the fingerprint
+  # is '[[["E"],["<tag>"]]]', 14 characters plus the tag.
+  def query_with_fingerprint_length(length)
+    DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["E"], tags: ["t" * (length - 14)])])
+  end
+
+  def test_a_fingerprint_up_to_the_digest_length_is_kept_verbatim
+    query = query_with_fingerprint_length(64)
+    assert_equal 64, query.fingerprint.length
+
+    assert_equal "count/v1/#{query.fingerprint}", DcbEventStore::Snapshot.new(name: "count").key(query)
+  end
+
+  def test_a_longer_fingerprint_is_replaced_by_its_sha256
+    query = query_with_fingerprint_length(65)
+
+    key = DcbEventStore::Snapshot.new(name: "count").key(query)
+
+    assert_equal "count/v1/#{Digest::SHA256.hexdigest(query.fingerprint)}", key
+    assert_equal "count/v1/".length + 64, key.length
+  end
+
+  def test_hashed_keys_still_tell_different_queries_apart
+    snapshot = DcbEventStore::Snapshot.new(name: "count")
+    a = query_with_fingerprint_length(80)
+    b = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["E"], tags: ["#{'t' * 65}x"])])
+
+    refute_equal snapshot.key(a), snapshot.key(b)
+    assert_equal snapshot.key(a), snapshot.key(query_with_fingerprint_length(80))
+  end
 end

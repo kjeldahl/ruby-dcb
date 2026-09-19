@@ -322,5 +322,5 @@ counts, and the corresponding AppSignal metrics (`dcb.decision_model.events`,
 - The `autovacuum_analyze_scale_factor` advice stays here (§3.1), with a
   pointer from the README.
 
-Still open: keys are unbounded text (`name/vN/<fingerprint>`); a projection
-with a very long `Query` gets a very long key.
+- Keys are bounded: a fingerprint longer than a SHA-256 hex digest (64
+  characters) is replaced by that digest, so `name/vN/` plus at most 64.
