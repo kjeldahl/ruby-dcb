@@ -1,11 +1,14 @@
 module DcbEventStore
   class Projection
-    attr_reader :initial_state, :handlers, :query
+    attr_reader :initial_state, :handlers, :query, :snapshot
 
-    def initialize(initial_state:, handlers:, query:)
+    # +snapshot+ is an optional Snapshot: with one, DecisionModel.build can
+    # start the fold from a stored state instead of the initial one.
+    def initialize(initial_state:, handlers:, query:, snapshot: nil)
       @initial_state = initial_state
       @handlers = handlers
       @query = query
+      @snapshot = snapshot
     end
 
     def apply(state, event)
@@ -13,10 +16,12 @@ module DcbEventStore
       handler ? handler.call(state, event) : state
     end
 
-    def fold(events)
+    # Folds +events+ onto +from+ (the initial state by default, or a
+    # snapshot's state).
+    def fold(events, from: @initial_state)
       DcbEventStore.instrumentation.instrument("projection.dcb", event_types: event_types) do |payload|
         count = 0
-        state = events.reduce(@initial_state) do |acc, event|
+        state = events.reduce(from) do |acc, event|
           count += 1
           apply(acc, event)
         end

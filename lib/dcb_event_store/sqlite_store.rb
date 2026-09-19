@@ -44,6 +44,10 @@ module DcbEventStore
       @db.execute("#{sql} LIMIT ?", params + [limit])
     end
 
+    def max_position
+      @db.get_first_value("SELECT max(sequence_position) FROM events")
+    end
+
     # Nothing to take: BEGIN IMMEDIATE already made this connection the
     # database's only writer.
     def acquire_locks!(_condition); end

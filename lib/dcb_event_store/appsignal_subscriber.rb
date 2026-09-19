@@ -8,6 +8,15 @@ module DcbEventStore
   #   dcb.append.conflicts       counter            ConditionNotMet failures
   #   dcb.subscribe.delivered    counter            deliveries, tagged by phase
   #   dcb.subscribe.lag          distribution (ms)  live delivery lag
+  #   dcb.decision_model.events  distribution       events read per build
+  #   dcb.snapshot.hits          counter            snapshots found on load
+  #   dcb.snapshot.misses        counter            snapshots asked for but missing
+  #   dcb.snapshot.writes        counter            snapshots written
+  #   dcb.snapshot.folded        distribution       events folded on top of a snapshot before it was rewritten
+  #
+  # dcb.decision_model.events is the number the snapshots exist to hold
+  # down: with snapshots working it stays flat as a projection's history
+  # grows. The snapshot counters give the hit rate.
   #
   # Metrics are tagged with the emitting store (demodulized, e.g.
   # store=PostgresStore); dcb.subscribe.delivered additionally carries
@@ -53,6 +62,8 @@ module DcbEventStore
       case event.name
       when StoreInstrumentation::APPEND_EVENT then record_append(event, tags)
       when StoreInstrumentation::SUBSCRIBE_EVENT then record_subscribe(event, tags)
+      when StoreInstrumentation::SNAPSHOT_EVENT then record_snapshot(event, tags)
+      when DecisionModel::EVENT then record_decision_model(event)
       end
     end
 
@@ -92,6 +103,33 @@ module DcbEventStore
 
       lag = event.payload[:lag] || event.payload[:max_lag]
       appsignal.add_distribution_value(metric("subscribe", "lag"), lag * 1000, tags) if phase == :live && lag
+    end
+
+    # decision_model.dcb carries no store:, so the metric has no tags.
+    def record_decision_model(event)
+      count = event.payload[:event_count]
+      appsignal.add_distribution_value(metric("decision_model", "events"), count) if count
+    end
+
+    # A failed load or write reports nothing but the error counter: the
+    # payload's counts are only filled in on completion.
+    def record_snapshot(event, tags)
+      payload = event.payload
+      case payload.fetch(:operation)
+      when :load
+        loaded = payload[:loaded] or return
+        counter(metric("snapshot", "hits"), loaded, tags)
+        counter(metric("snapshot", "misses"), payload.fetch(:requested) - loaded, tags)
+      when :write
+        return if event.error
+
+        counter(metric("snapshot", "writes"), 1, tags)
+        appsignal.add_distribution_value(metric("snapshot", "folded"), payload.fetch(:folded_count), tags)
+      end
+    end
+
+    def counter(name, value, tags)
+      appsignal.increment_counter(name, value, tags) if value.positive?
     end
   end
 end

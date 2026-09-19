@@ -12,6 +12,9 @@ module DcbEventStore
     # Append-only is enforced by BEFORE UPDATE/DELETE triggers on both tables
     # (SQLite triggers are per-statement-per-row, and RAISE(ABORT) surfaces as
     # SQLite3::ConstraintException), matching the PostgreSQL trigger's wording.
+    #
+    # projection_snapshots, written by Snapshots::SqliteSnapshotStore, is the
+    # one mutable table: no trigger.
     module Schema
       CREATE_SQL = <<~SQL.freeze
         CREATE TABLE IF NOT EXISTS events (
@@ -50,6 +53,13 @@ module DcbEventStore
         BEGIN
           SELECT RAISE(ABORT, 'event_tags table is append-only: DELETE not allowed');
         END;
+
+        CREATE TABLE IF NOT EXISTS projection_snapshots (
+          key        TEXT PRIMARY KEY,
+          position   INTEGER NOT NULL,
+          state      TEXT NOT NULL CHECK (json_valid(state)),
+          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
       SQL
 
       # event_tags first: it references events. DROP TABLE does not fire the
@@ -57,6 +67,7 @@ module DcbEventStore
       DROP_SQL = <<~SQL.freeze
         DROP TABLE IF EXISTS event_tags;
         DROP TABLE IF EXISTS events;
+        DROP TABLE IF EXISTS projection_snapshots;
       SQL
 
       # How long a connection waits for the database's write lock before it

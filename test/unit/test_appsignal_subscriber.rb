@@ -215,6 +215,73 @@ class TestAppsignalSubscriber < Minitest::Test
     Object.send(:remove_const, :Appsignal) if fake_module && Object.const_defined?(:Appsignal)
   end
 
+  # --- decision models and snapshots ---
+
+  def test_decision_model_records_events_read_per_build
+    @subscriber.call(build_event(name: "decision_model.dcb",
+                                 payload: {projections: [:a], event_count: 12, last_position: 40}))
+
+    assert_equal ["dcb.decision_model.events", 12, {}], @appsignal.distributions.last
+  end
+
+  # A build that raised publishes the event without a count: nothing but
+  # the duration and the error are recorded.
+  def test_failed_decision_model_records_no_event_count
+    @subscriber.call(build_event(name: "decision_model.dcb", error: IOError.new("down"),
+                                 payload: {projections: [:a]}))
+
+    assert_equal ["dcb.decision_model.duration"], @appsignal.distributions.map(&:first)
+    assert_equal ["dcb.decision_model.errors"], @appsignal.counters.map(&:first)
+  end
+
+  def test_decision_model_with_zero_events_records_the_zero
+    @subscriber.call(build_event(name: "decision_model.dcb", payload: {projections: [:a], event_count: 0}))
+
+    assert_equal ["dcb.decision_model.duration", "dcb.decision_model.events"], @appsignal.distributions.map(&:first)
+    assert_equal 0, @appsignal.distributions.last[1]
+  end
+
+  def test_snapshot_load_counts_hits_and_misses
+    @subscriber.call(build_event(name: "snapshot.dcb",
+                                 payload: {store: "DcbEventStore::Snapshots::PostgresSnapshotStore",
+                                           operation: :load, projections: %i[a b c], requested: 3, loaded: 2}))
+
+    assert_equal [["dcb.snapshot.hits", 2, {store: "PostgresSnapshotStore"}],
+                  ["dcb.snapshot.misses", 1, {store: "PostgresSnapshotStore"}]], @appsignal.counters
+  end
+
+  def test_snapshot_load_with_every_snapshot_found_counts_no_misses
+    @subscriber.call(build_event(name: "snapshot.dcb",
+                                 payload: {store: "S", operation: :load, projections: [:a], requested: 1, loaded: 1}))
+
+    assert_equal ["dcb.snapshot.hits"], @appsignal.counters.map(&:first)
+  end
+
+  def test_failed_snapshot_load_counts_only_the_error
+    @subscriber.call(build_event(name: "snapshot.dcb", error: IOError.new("down"),
+                                 payload: {store: "S", operation: :load, projections: [:a], requested: 1}))
+
+    assert_equal ["dcb.snapshot.errors"], @appsignal.counters.map(&:first)
+  end
+
+  def test_snapshot_write_counts_the_write_and_records_folded_events
+    @subscriber.call(build_event(name: "snapshot.dcb",
+                                 payload: {store: "DcbEventStore::Snapshots::SqliteSnapshotStore", operation: :write,
+                                           projection: :a, key: "a/v1/Query[X]", position: 9, folded_count: 150}))
+
+    assert_equal [["dcb.snapshot.writes", 1, {store: "SqliteSnapshotStore"}]], @appsignal.counters
+    assert_equal ["dcb.snapshot.folded", 150, {store: "SqliteSnapshotStore"}], @appsignal.distributions.last
+  end
+
+  def test_failed_snapshot_write_counts_only_the_error
+    @subscriber.call(build_event(name: "snapshot.dcb", error: IOError.new("down"),
+                                 payload: {store: "S", operation: :write, projection: :a, key: "k", position: 9,
+                                           folded_count: 1}))
+
+    assert_equal ["dcb.snapshot.errors"], @appsignal.counters.map(&:first)
+    assert_equal ["dcb.snapshot.duration"], @appsignal.distributions.map(&:first)
+  end
+
   # --- end to end through a store ---
 
   def test_store_activity_produces_metrics

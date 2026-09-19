@@ -239,6 +239,18 @@ class TestSqlBuilderSqlite < Minitest::Test
     assert_equal ['["A"]', 5], params
   end
 
+  # The after bound is handed to the tag clause as well, which on SQLite
+  # binds it inside the event_tags subquery, before the tag count.
+  def test_after_is_passed_into_the_tag_clause
+    sql, params = @builder.read_sql(query([item(tags: ["t1"])]), after: 5)
+    expected = "SELECT * FROM events WHERE ((sequence_position IN (SELECT sequence_position FROM event_tags " \
+               "WHERE tag IN (SELECT value FROM json_each(?)) AND sequence_position > ? " \
+               "GROUP BY sequence_position HAVING COUNT(*) = ?))) AND sequence_position > ? " \
+               "ORDER BY sequence_position ASC"
+    assert_equal expected, sql
+    assert_equal ['["t1"]', 5, 1, 5], params
+  end
+
   def test_condition_sql_match_all_with_after
     sql, params = @builder.condition_sql(DcbEventStore::Query.all, 9)
     assert_equal "SELECT COUNT(*) FROM events WHERE sequence_position > ?", sql

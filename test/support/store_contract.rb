@@ -554,4 +554,17 @@ module StoreContract
       @store.append(slice.map { DcbEventStore::Event.new(type: type) })
     end
   end
+
+  # --- last_position ---
+
+  def test_last_position_is_nil_on_an_empty_store
+    assert_nil @store.last_position
+  end
+
+  def test_last_position_is_the_position_of_the_last_appended_event
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+    last = @store.append([DcbEventStore::Event.new(type: "C", tags: ["t:1"])]).last
+
+    assert_equal last.sequence_position, @store.last_position
+  end
 end

@@ -118,3 +118,34 @@ class TestQuery < Minitest::Test
     assert_equal 42, ac.after
   end
 end
+
+# Query#fingerprint is the cache identity snapshots key on; unlike #to_s it
+# must tell apart every pair of different queries.
+class TestQueryFingerprint < Minitest::Test
+  cover "DcbEventStore::Query*"
+
+  def item(event_types: [], tags: []) = DcbEventStore::QueryItem.new(event_types: event_types, tags: tags)
+
+  def test_renders_items_as_json_pairs_of_types_and_tags
+    query = DcbEventStore::Query.new([item(event_types: %w[A B], tags: ["t:1"]), item(tags: ["t:2"])])
+    assert_equal '[[["A","B"],["t:1"]],[[],["t:2"]]]', query.fingerprint
+  end
+
+  def test_unbounded_query_is_an_empty_list
+    assert_equal "[]", DcbEventStore::Query.all.fingerprint
+  end
+
+  def test_tags_that_render_alike_in_to_s_get_different_fingerprints
+    two_tags = DcbEventStore::Query.new([item(event_types: ["E"], tags: %w[a b])])
+    one_tag = DcbEventStore::Query.new([item(event_types: ["E"], tags: ["a,b"])])
+
+    assert_equal two_tags.to_s, one_tag.to_s
+    refute_equal two_tags.fingerprint, one_tag.fingerprint
+  end
+
+  def test_equal_queries_share_a_fingerprint
+    a = DcbEventStore::Query.new([item(event_types: [:A], tags: [:t])])
+    b = DcbEventStore::Query.new([item(event_types: ["A"], tags: ["t"])])
+    assert_equal a.fingerprint, b.fingerprint
+  end
+end

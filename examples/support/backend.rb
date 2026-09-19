@@ -12,8 +12,9 @@
 #   DCB_BACKEND=memory ruby examples/course_subscriptions.rb
 #
 # Every session starts from an empty store: PostgreSQL truncates the shared
-# test database, SQLite gets a throwaway file under Dir.tmpdir (override with
-# DCB_SQLITE_PATH), and InMemoryStore is empty by construction.
+# test database (or the one named by DCB_PG_DBNAME), SQLite gets a throwaway
+# file under Dir.tmpdir (override with DCB_SQLITE_PATH), and InMemoryStore is
+# empty by construction.
 #
 # Usage:
 #
@@ -27,7 +28,9 @@ require "fileutils"
 module Examples
   module Backend
     NAMES = %w[postgres sqlite memory].freeze
-    PG_DBNAME = "dcb_event_store_test"
+    # Override with DCB_PG_DBNAME to benchmark on a database the test suite
+    # is not truncating at the same time.
+    PG_DBNAME = ENV.fetch("DCB_PG_DBNAME", "dcb_event_store_test")
 
     def self.selected(name = nil)
       name || ENV.fetch("DCB_BACKEND", "postgres")

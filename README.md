@@ -162,6 +162,40 @@ result.states[:subscriptions]  # => 12
 result.append_condition        # use this when appending
 ```
 
+### Snapshots
+
+A decision model re-reads and re-folds every matching event on every build, so its cost grows with the length of the projection's history — a "popular course" with 10,000 subscriptions costs ~400ms per decision on either backend, nearly all of it row decoding. Snapshots cap that: a projection's folded state is stored at a sequence position, and the next build reads only the events after it (2–5ms for the same decision; measurements and design notes in `examples/SNAPSHOTS.md`). A projection opts in with a `Snapshot`, and `DecisionModel.build` takes the store to keep them in:
+
+```ruby
+snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn)   # or SqliteSnapshotStore.new(db)
+
+course_subscriptions = DcbEventStore::Projection.new(
+  initial_state: 0,
+  handlers: { "StudentSubscribedToCourse" => ->(count, _e) { count + 1 } },
+  query: DcbEventStore::Query.new([
+    DcbEventStore::QueryItem.new(event_types: ["StudentSubscribedToCourse"], tags: ["course:math-101"])
+  ]),
+  snapshot: DcbEventStore::Snapshot.new(name: "course_subscriptions", version: 1, every: 1)
+)
+
+result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
+  capacity: capacity_projection,             # no snapshot: always folded from the start
+  subscriptions: course_subscriptions        # folded from its snapshot, when one exists
+)
+```
+
+- The `projection_snapshots` table is part of the schema `Schema.create!` installs on both backends; nothing extra to set up.
+- The snapshot **key** is `name`, `version` and the projection's query (`Query#fingerprint`, a JSON rendering of its items that carries the entity's tags — replaced by its SHA-256 when longer than the digest itself, so keys stay under 64 characters plus the prefix), so one `Snapshot` configuration serves every instance of a projection and each entity gets its own snapshot.
+- **Invalidation is explicit.** Nothing can detect that a handler or `initial_state` changed, so `version:` is required (no default): bump it whenever the fold would compute differently, and the old snapshots are never read again. A query change needs no bump (the key already differs). For a change that touches every projection at once, set `DcbEventStore::Snapshots.epoch = "<release>"` at boot: it prefixes every key, so one knob invalidates everything.
+- **Cleanup:** stale rows are never read but stay in the table until purged: `snapshots.purge(name: "course_subscriptions", keep_version: 2)` drops the other versions of a projection (`keep_version:` omitted drops them all), and `snapshots.purge_other_epochs` drops everything not under the current epoch. Both return the number of rows removed.
+- A build with snapshots first takes the store's `last_position` (the log head), then reads; its append condition guards up to that head, and snapshots are written there, so the state a snapshot holds is exactly the state the build returned.
+- `every:` is the write policy: a snapshot is written the first time a projection is built and thereafter once the head has moved at least `every` positions past it — whether the events in between matched the projection or not, since the next catch-up read would have to look past them. `every: 1` (one upsert per projection per build that saw any append) keeps the catch-up read shortest and is the right default for decision models.
+- `DecisionModel.build` groups projections by snapshot position and issues one read per group (projections without a snapshot read from the start of the log, but only their own query), so a projection over a brand-new entity does not force the others to replay.
+- State is stored as JSON by the SQL stores, so JSON-compatible states (numbers, strings, booleans, arrays, symbol-keyed hashes) round-trip as they are; anything else takes `dump:`/`load:` lambdas on the `Snapshot`.
+- `Snapshots::InMemorySnapshotStore` keeps the states in the process (a warm cache, lost on restart). It stores the very objects the fold produced, so handlers that mutate their state in place need `dump: Marshal.method(:dump), load: Marshal.method(:load)` or must return new objects.
+- Snapshots keep the DCB guarantees only as far as a read does: a snapshot position means "every matching event up to here was visible when it was read", which holds on SQLite and `InMemoryStore` (single writer, positions commit in order) and on PostgreSQL under the same per-tag locking that already protects the append condition.
+- On PostgreSQL, keep `autovacuum_analyze_scale_factor` low on the `events` table (e.g. `0.01`): with stale statistics the planner walks the primary key for the catch-up read, and the walk grows with everything appended since the snapshot. `examples/SNAPSHOTS.md` §3.1 has the measurements.
+
 ### Client (causation/correlation wiring)
 
 `Client` wraps a store and auto-stamps events with `correlation_id` and `causation_id`:
@@ -231,10 +265,13 @@ Emitted events and payloads:
 | `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
 | `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
-| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:` |
+| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
+| `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
 | `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
+
+`event_count` on `decision_model.dcb` is the number snapshots exist to hold down: with snapshots working it stays flat as a projection's history grows, and `snapshot.dcb`'s `requested:`/`loaded:` give the hit rate.
 
 Reads are lazy enumerators, so `read.dcb` fires when the enumeration finishes (completing or exiting early via `break`/`#first`), with `event_count` reflecting the events actually yielded. Whether a read is instrumented is decided when the read is issued, and an abandoned external iterator (`#next` without exhausting) publishes nothing.
 
@@ -357,6 +394,10 @@ DcbEventStore::AppsignalSubscriber.new.attach_to
 | `dcb.append.conflicts` | counter | `ConditionNotMet` failures — the consistency-boundary conflict rate |
 | `dcb.subscribe.delivered` | counter | events delivered to subscribers, tagged `phase=live/catch_up` |
 | `dcb.subscribe.lag` | distribution (ms) | live delivery lag — the staleness signal; alert on its p95/p99 |
+| `dcb.decision_model.events` | distribution | events read per build — flat when snapshots work, growing when they do not |
+| `dcb.snapshot.hits` / `dcb.snapshot.misses` | counter | snapshots found / missing on load (hit rate) |
+| `dcb.snapshot.writes` | counter | snapshots written |
+| `dcb.snapshot.folded` | distribution | events folded on top of a snapshot before it was rewritten (tune `every:`) |
 
 Metrics are tagged with the emitting store (`store=PostgresStore` / `store=SqliteStore` / `store=InMemoryStore`). The adapter encodes the gem's semantics: delivery lag is recorded **only for the `:live` phase** (catch-up replays history, where large lag is expected and would poison the staleness signal), and comes from `lag:` or `max_lag:` depending on the store's `subscribe_instrumentation:` mode.
 
@@ -407,6 +448,7 @@ All examples from [dcb.events](https://dcb.events/examples) are implemented in `
 | `opt_in_token.rb` | Token verification without separate token store |
 | `prevent_record_duplication.rb` | Idempotency tokens via tags |
 | `performance.rb` | Benchmark: seeding, reads, appends, concurrency |
+| `snapshot_benchmark.rb` | Benchmark: decision models with snapshots vs. replay (`examples/SNAPSHOTS.md`) |
 
 Run any example:
 

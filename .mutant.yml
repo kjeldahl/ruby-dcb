@@ -7,6 +7,8 @@ requires:
   - ./lib/dcb_event_store/postgres_store
   - ./lib/dcb_event_store/sqlite_store
   - ./lib/dcb_event_store/store
+  # Same for the driver-free snapshot store, autoloaded under Snapshots.
+  - ./lib/dcb_event_store/snapshots/in_memory_snapshot_store
   - ./test/test_helper
   - ./test/unit/test_event
   - ./test/unit/test_query
@@ -22,6 +24,7 @@ requires:
   - ./test/unit/test_railtie
   - ./test/unit/test_appsignal_subscriber
   - ./test/unit/test_instrumentation
+  - ./test/unit/test_snapshot_instrumentation
   - ./test/unit/test_postgres_array_codec
   - ./test/unit/test_postgres_dialect
   - ./test/unit/test_sql_builder
@@ -30,6 +33,9 @@ requires:
   - ./test/unit/test_sql_store
   - ./test/unit/test_sqlite_dialect
   - ./test/unit/test_lock_keys
+  - ./test/unit/test_snapshot
+  - ./test/unit/test_in_memory_snapshot_store
+  - ./test/unit/test_query_key_collisions
   - ./test/integration/test_append_only
   - ./test/integration/test_subscribe
   - ./test/integration/test_client
@@ -61,6 +67,16 @@ matcher:
     - DcbEventStore::Railtie*
     - DcbEventStore::AppsignalSubscriber*
     - DcbEventStore::StoreInstrumentation*
+    # Snapshots: the configuration object and the driver-free snapshot
+    # store. The SQL snapshot stores are left out for the same reason as the
+    # SQL event stores -- driver glue over a live server.
+    - DcbEventStore::Snapshot*
+    - DcbEventStore::Snapshots::InMemorySnapshotStore*
+    # What survives on these two plus DecisionModel* is equivalent by
+    # construction: removing a @mutex.synchronize (nothing a single-threaded
+    # suite can observe), dropping a fast path that only saves work
+    # (DecisionModel.read_events' single-group read), h[k] -> h.key?(k) /
+    # h.fetch(k) on keys that are always present.
     # Pure collaborators extracted from the stores: SQL building, the PG
     # dialect it is parametrized with, advisory-lock key derivation, the PG
     # array codec and the created_at parser. Fast to mutate (no live PG) and

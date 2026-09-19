@@ -31,6 +31,11 @@ module DcbEventStore
       instrument_read(paginated_read(query, after: after), query, after)
     end
 
+    # The sequence position of the last stored event, nil on an empty store.
+    def last_position
+      max_position
+    end
+
     def append(events, condition = nil)
       events = Array(events)
       instrument_append(events, condition) do
@@ -139,6 +144,11 @@ module DcbEventStore
     # sequence position, starting after +after+ (nil = from the beginning).
     def fetch_batch(query, after:, limit:)
       raise NotImplementedError, "#{self.class} must implement #fetch_batch"
+    end
+
+    # The highest sequence_position in the events table, nil when empty.
+    def max_position
+      raise NotImplementedError, "#{self.class} must implement #max_position"
     end
 
     # Announces that events up to +position+ were committed, so subscribers
