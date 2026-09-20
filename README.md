@@ -57,7 +57,7 @@ Both backends implement the same API and pass the same contract suite; the diffe
 
 | | `PostgresStore` | `SqliteStore` |
 |---|-----------------|---------------|
-| append serialization | per-tag advisory locks — appends to disjoint tags run in parallel | one writer database-wide (`BEGIN IMMEDIATE`) |
+| append serialization | per-tag advisory locks on the tags written and the tags the condition names — appends to disjoint tags run in parallel | one writer database-wide (`BEGIN IMMEDIATE`) |
 | subscribe wake-up | `LISTEN/NOTIFY`, no polling | polls `PRAGMA data_version` every `poll_interval:` (default 0.1s) |
 | `created_at` precision | microseconds | milliseconds |
 | tag lookup | GIN index on the `tags` column | `event_tags(tag, sequence_position)` index table |
@@ -128,6 +128,8 @@ condition = DcbEventStore::AppendCondition.new(
 store.append(event, condition)
 # raises DcbEventStore::ConditionNotMet on conflict
 ```
+
+Tags on an event are an index; tags in a condition are the boundary. An event may carry tags its condition never names (`order:` on an event guarded only by `idempotency:`, `student:` on an admin enrolment guarded only by `course:`): they are there for reads and other decisions, and the store still serializes the append against any condition naming them. Widening the condition to cover them would only widen the boundary and add conflicts.
 
 ### Projections and decision models
 
@@ -489,7 +491,7 @@ Nested constants resolve through the alias too (`Store::LockKeys`), so nothing b
 
 - **No ORM** — raw `pg` / `sqlite3` driver, minimal SQL surface
 - **One template, two backends** — `SqlStore` holds read/append/subscribe; each backend supplies a handful of hooks and a `Dialect`
-- **Serialized condition checks** — advisory locks per tag on PostgreSQL, `BEGIN IMMEDIATE` on SQLite
+- **Serialized condition checks** — advisory locks per tag on PostgreSQL (every append locks the tags its events carry plus the tags its condition names, so a writer on a tag always waits for a condition on it and vice versa; a condition naming no tag takes a global lock), `BEGIN IMMEDIATE` on SQLite
 - **Indexed tags** — GIN index on the `tags` column on PostgreSQL, an `event_tags` index table on SQLite
 - **Append-only** — database triggers prevent UPDATE/DELETE
 - **Idempotent writes** — `ON CONFLICT (event_id) DO NOTHING`

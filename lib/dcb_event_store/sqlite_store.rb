@@ -50,7 +50,7 @@ module DcbEventStore
 
     # Nothing to take: BEGIN IMMEDIATE already made this connection the
     # database's only writer.
-    def acquire_locks!(_condition); end
+    def acquire_locks!(_events, _condition); end
 
     def count_matching(query, after)
       sql, params = @sql.condition_sql(query, after)

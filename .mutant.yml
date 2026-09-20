@@ -47,6 +47,7 @@ requires:
   - ./test/sqlite/test_subscribe
   - ./test/sqlite/test_concurrent_append
   - ./test/concurrency/test_concurrent_append
+  - ./test/concurrency/test_in_flight_append
 jobs: 1
 usage: opensource
 matcher:

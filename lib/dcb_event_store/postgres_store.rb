@@ -4,9 +4,10 @@ module DcbEventStore
   # PostgreSQL-backed store: the SqlStore hooks implemented against a live
   # PG connection.
   #
-  # Appends serialize on per-tag advisory locks (see LockKeys) so appends
-  # touching disjoint tags still run in parallel, and subscribers are woken
-  # through LISTEN/NOTIFY rather than polling.
+  # Appends serialize on per-tag advisory locks (see LockKeys) covering the
+  # tags they write and the tags their condition names, so appends touching
+  # disjoint tags still run in parallel, and subscribers are woken through
+  # LISTEN/NOTIFY rather than polling.
   #
   # The store takes the connection over: it is the store's alone, and must
   # not be shared with application queries. #subscribe puts it in LISTEN for
@@ -50,10 +51,15 @@ module DcbEventStore
       value && Integer(value)
     end
 
-    def acquire_locks!(condition)
-      keys = LockKeys.for(condition)
-      pg_arr = "{#{keys.join(',')}}"
-      @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [pg_arr])
+    # The global key first, then the tag keys in sorted order, so every
+    # append acquires in one order (see LockKeys).
+    def acquire_locks!(events, condition)
+      locks = LockKeys.for(events, condition)
+      fn = locks.global == :exclusive ? "pg_advisory_xact_lock" : "pg_advisory_xact_lock_shared"
+      @conn.exec("SELECT #{fn}(#{LockKeys::APPEND_LOCK_KEY})")
+      return if locks.tags.empty?
+
+      @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", ["{#{locks.tags.join(',')}}"])
     end
 
     def count_matching(query, after)
