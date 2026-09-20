@@ -28,15 +28,13 @@ class TestDecisionModel < Minitest::Test
   end
 end
 
-# KNOWN FAILURE (documents a consistency hole, see the review on this
-# branch). PostgreSQL conditional appends on disjoint tags hold disjoint
-# advisory locks and so commit out of sequence order. A build with snapshots
-# takes max(sequence_position) as the head; that head can lie past an
-# in-flight append on the very tag the build is deciding about, which the
-# per-tag lock would have serialized against the *old* condition (after =
-# last matching event read). The condition then accepts an append it must
-# reject, and the snapshot written at the head never folds the in-flight
-# event once it commits.
+# PostgreSQL conditional appends on disjoint tags hold disjoint advisory
+# locks and so commit out of sequence order: max(sequence_position) can lie
+# past an in-flight append on the very tag a build is deciding about. A
+# build with snapshots must therefore guard (and write its snapshots at) the
+# last matching event it read, which the tag's lock keeps in order, never
+# the head; otherwise the condition accepts an append it must reject and the
+# snapshot never folds the in-flight event once it commits.
 class TestDecisionModelPostgresGap < Minitest::Test
   include PostgresDatabaseHelper
 

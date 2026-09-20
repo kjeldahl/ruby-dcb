@@ -81,10 +81,11 @@ every N.
 A snapshot is a projection's state folded through every matching event with
 `sequence_position <= P`, stored under a key. Semantics chosen for DCB:
 
-- **Key** = `"#{name}/v#{version}/#{query}"`. The projection's `Query`
-  renders its types and tags (`Query[StudentSubscribedToCourse{course:c1}]`),
-  so one `Snapshot` configuration covers every entity of a projection and each
-  entity gets its own row. `version` invalidates on handler changes.
+- **Key** = `"#{name}/v#{version}/#{query.fingerprint}"`. The fingerprint is
+  a JSON rendering of the query's items (types and tags; hashed when longer
+  than 64 characters), so one `Snapshot` configuration covers every entity
+  of a projection and each entity gets its own row. `version` invalidates on
+  handler changes.
 - **Position** = the position of the build's append condition (`after`).
   Every projection of a build folded everything up to it, so all its
   snapshots are written at the same position, with exactly the states the
@@ -102,12 +103,11 @@ A snapshot is a projection's state folded through every matching event with
   snapshot positions). Every event matching the union at or below that
   position is either in a snapshot or was read, so the guarantee is the same
   as without snapshots.
-- **Write policy** `every:` — written when missing, then once the log head
-  is at least `every` positions past the snapshot, whether the events in
-  between matched or not (the spike counted matching events only, which left
-  an idle entity's snapshot behind and let its catch-up read grow; the store
-  now exposes `last_position`, taken before the reads, and both the
-  condition and the snapshots use it). The upsert is forward-only (a slower
+- **Write policy** `every:` — written when missing, then once the last
+  matching event the projection's read returned is at least `every`
+  positions past the snapshot. An idle entity's snapshot stays put while the
+  log grows (§3.1 has the cost); a policy that followed the log head instead
+  was tried and reverted (§5). The upsert is forward-only (a slower
   concurrent builder cannot roll a snapshot back).
 - **Stores**: `InMemorySnapshotStore` (Hash + Mutex, no serialization),
   `PostgresSnapshotStore` and `SqliteSnapshotStore` (`projection_snapshots`
@@ -180,8 +180,10 @@ of the snapshot.
 
 \* See §3.1: a catch-up read walking the primary key past the events
 appended after the snapshot, while the planner's statistics predate them.
-With snapshots that follow the head (the shipped policy) the same builds
-take ~0.65 ms, as in the 100k table.
+Measured with a "follow the head" write policy the same builds took
+~0.65 ms, as in the 100k table; that policy was reverted (§5), so these
+starred cells are what the shipped policy costs on an idle entity with
+stale statistics.
 
 ### The write loop: build + append with condition, per operation
 
@@ -230,12 +232,13 @@ same database:
 
 In the spike, a snapshot only moved when the projection folded new events,
 so an idle entity's snapshot sat where it was while the log grew past it —
-which is what the starred cells show. The shipped policy takes the store's
-`last_position` before the reads and rewrites a snapshot once the head is
-`every` positions past it, so a catch-up read starts at (or near) the head
-and walks nothing; the 100k PostgreSQL table above was measured that way and
-is flat at ~0.65 ms. The planner effect itself remains for an entity that is
-not rebuilt for a long time: in steady state autoanalyze re-plans after every
+which is what the starred cells show. Following the log head instead (taking
+the store's `last_position` before the reads and rewriting a snapshot once
+the head is `every` positions past it) makes the catch-up read start at the
+head and walk nothing — the 100k PostgreSQL table above was measured that
+way and is flat at ~0.65 ms — but is unsafe on PostgreSQL (§5) and was
+reverted, so the shipped policy is the spike's. The planner effect is
+bounded by statistics: in steady state autoanalyze re-plans after every
 `autovacuum_analyze_scale_factor` (10%) of growth, which bounds the walk at
 ~10% of the table — about 5 ms per 100k events, or ~250 ms on a 5M-event
 table right before an autoanalyze. Lower the threshold on the table
@@ -314,9 +317,16 @@ counts, and the corresponding AppSignal metrics (`dcb.decision_model.events`,
 
 - Materialized streams dropped.
 - `projection_snapshots` DDL folded into both backends' `Schema.create!`.
-- Stores expose `last_position`; a snapshotted build guards up to the log
-  head and rewrites snapshots once the head is `every` positions past them,
-  so an idle entity's catch-up read no longer grows with the log.
+- Stores expose `last_position`. A snapshotted build takes it before its
+  reads and drops everything past it, so an event committed between two of
+  its per-group reads is neither folded nor guarded. The condition and the
+  snapshots use the last matching event each read returned, not the head:
+  a "follow the head" policy was tried and reverted, because on PostgreSQL
+  `max(sequence_position)` can lie past an uncommitted append on the very
+  tag being decided about (disjoint-tag appends commit out of order), which
+  let a racing append through the condition and baked the miss into the
+  snapshot. The idle-entity catch-up cost of §3.1 is the price; the
+  `autovacuum_analyze_scale_factor` advice bounds it.
 - The `Time.parse` swap in row decoding shipped separately (#41); this branch
   is rebased on it.
 - The `autovacuum_analyze_scale_factor` advice stays here (§3.1), with a

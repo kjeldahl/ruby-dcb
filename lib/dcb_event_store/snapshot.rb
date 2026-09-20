@@ -23,10 +23,11 @@ module DcbEventStore
   # key instead ("<epoch>/name/vN/…"); set it once at boot, e.g. to the
   # release, and #purge_other_epochs drops what earlier epochs left.
   #
-  # +every+ is the write policy: a fresh snapshot is stored once the log head
-  # has moved at least that many positions past the last one (1 = whenever
-  # anything at all was appended since), so the catch-up read after it never
-  # has to look past more than +every+ events, matching or not.
+  # +every+ is the write policy: a fresh snapshot is stored once the last
+  # matching event a build read is at least that many positions past the
+  # last one (1 = whenever the build folded anything new). The position is
+  # always that of a matching event, never the log head: see
+  # DecisionModel.build for why.
   #
   # +dump+ / +load+ convert the state to and from the value the snapshot
   # store persists. The default keeps JSON-compatible states (numbers,
