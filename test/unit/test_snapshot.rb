@@ -101,7 +101,16 @@ class TestSnapshot < Minitest::Test
   def test_every_below_one_is_rejected
     [0, -1, -100].each do |every|
       error = assert_raises(ArgumentError) { DcbEventStore::Snapshot.new(name: "count", version: 1, every: every) }
-      assert_equal "every must be >= 1", error.message
+      assert_equal "every must be an Integer >= 1", error.message
+    end
+  end
+
+  # The policy compares positions, which are Integers; a Float or a String
+  # would only work by accident of coercion.
+  def test_every_must_be_an_integer
+    [1.5, "2", nil, 2.0].each do |every|
+      error = assert_raises(ArgumentError) { DcbEventStore::Snapshot.new(name: "count", version: 1, every: every) }
+      assert_equal "every must be an Integer >= 1", error.message, "every: #{every.inspect} was accepted"
     end
   end
 
@@ -116,6 +125,13 @@ class TestSnapshot < Minitest::Test
   def test_version_is_required
     error = assert_raises(ArgumentError) { DcbEventStore::Snapshot.new(name: "count") }
     assert_match(/version/, error.message)
+  end
+
+  # Passing nil explicitly would otherwise satisfy the keyword and drop the
+  # version part from the key ("count/…"), dodging the rule.
+  def test_version_nil_is_rejected
+    error = assert_raises(ArgumentError) { DcbEventStore::Snapshot.new(name: "count", version: nil) }
+    assert_equal "version is required", error.message
   end
 
   # --- epoch ---
