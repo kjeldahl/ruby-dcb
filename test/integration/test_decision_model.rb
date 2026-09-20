@@ -27,3 +27,80 @@ class TestDecisionModel < Minitest::Test
     DcbEventStore::Snapshots::PostgresSnapshotStore.new(@conn).tap(&:clear)
   end
 end
+
+# KNOWN FAILURE (documents a consistency hole, see the review on this
+# branch). PostgreSQL conditional appends on disjoint tags hold disjoint
+# advisory locks and so commit out of sequence order. A build with snapshots
+# takes max(sequence_position) as the head; that head can lie past an
+# in-flight append on the very tag the build is deciding about, which the
+# per-tag lock would have serialized against the *old* condition (after =
+# last matching event read). The condition then accepts an append it must
+# reject, and the snapshot written at the head never folds the in-flight
+# event once it commits.
+class TestDecisionModelPostgresGap < Minitest::Test
+  include PostgresDatabaseHelper
+
+  def setup
+    setup_db
+    @snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(@conn).tap(&:clear)
+    @slow = PostgresDatabaseHelper.connection
+    @fast = PostgresDatabaseHelper.connection
+    @slow_open = false
+  end
+
+  def teardown
+    @slow.exec("ROLLBACK") if @slow_open
+    @slow&.close
+    @fast&.close
+    teardown_db
+  end
+
+  def query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Sub"], tags: ["course:c1"])])
+
+  def subscriptions
+    DcbEventStore::Projection.new(initial_state: 0, handlers: { "Sub" => ->(s, _e) { s + 1 } }, query: query,
+                                  snapshot: DcbEventStore::Snapshot.new(name: "subs", version: 1))
+  end
+
+  def sub(tag) = DcbEventStore::Event.new(type: "Sub", tags: [tag])
+
+  # A conditional append on course:c1 that has taken its lock and its
+  # sequence position but not committed yet.
+  def start_slow_append
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query, after: 1)
+    keys = DcbEventStore::PostgresStore::LockKeys.for(condition)
+    @slow.exec("BEGIN")
+    @slow_open = true
+    @slow.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", ["{#{keys.join(',')}}"])
+    @slow.exec_params(
+      "INSERT INTO events (event_id, type, data, tags, schema_version) VALUES ($1, 'Sub', '{}', '{course:c1}', 1)",
+      [SecureRandom.uuid]
+    )
+  end
+
+  def commit_slow_append
+    @slow.exec("COMMIT")
+    @slow_open = false
+  end
+
+  def test_head_past_an_in_flight_append_on_the_same_tag
+    @store.append([sub("course:c1")])                          # position 1
+    start_slow_append                                          # position 2, uncommitted, holds lock c1
+    DcbEventStore::PostgresStore.new(@fast).append([sub("course:c2")]) # position 3, committed
+
+    result = DcbEventStore::DecisionModel.build(@store, snapshots: @snapshots, subs: subscriptions)
+    plain = DcbEventStore::DecisionModel.build(@store, subs: subscriptions)
+    assert_equal 1, result.states[:subs]
+    assert_equal 1, plain.append_condition.after
+
+    commit_slow_append # position 2 visible now
+
+    assert_raises(DcbEventStore::ConditionNotMet) { @store.append([sub("course:c1")], plain.append_condition) }
+    assert_raises(DcbEventStore::ConditionNotMet, "the snapshotted condition let an append past event 2") do
+      @store.append([sub("course:c1")], result.append_condition)
+    end
+
+    rebuilt = DcbEventStore::DecisionModel.build(@store, snapshots: @snapshots, subs: subscriptions)
+    assert_equal 2, rebuilt.states[:subs], "the snapshot never folds event 2"
+  end
+end

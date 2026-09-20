@@ -110,6 +110,63 @@ module SnapshotDecisionModelContract
     end
   end
 
+  # Appends to the store once the first read group has been consumed, so
+  # events land between two of a build's reads: what a concurrent writer
+  # does. Only the reads are delegated.
+  class InterleavingWriter
+    def initialize(store, &between)
+      @store = store
+      @between = between
+      @reads = 0
+    end
+
+    def last_position = @store.last_position
+    def read(query) = consume(@store.read(query))
+    def read_from(query, after:) = consume(@store.read_from(query, after: after))
+
+    private
+
+    def consume(events)
+      events = events.to_a
+      @reads += 1
+      @between.call if @reads == 1
+      events
+    end
+  end
+
+  # KNOWN FAILURE (documents a consistency hole, see the review on this
+  # branch). A build with snapshots issues one read per snapshot position,
+  # at different times. Events committed between two of those reads are
+  # missed by the earlier group, while the later group's events push
+  # +after+ past them: the condition then accepts an append it should
+  # reject, and the snapshot written at that position never folds the
+  # missed event. Without snapshots there is one read and this cannot
+  # happen. +after+ must not exceed what every read covered (the head
+  # taken before the reads), and events past it must not be folded.
+  def test_events_landing_between_two_read_groups_are_guarded
+    course = snap_counter("course:c1", snapshot: snap_config("course"))
+    student = snap_counter("student:s1", snapshot: snap_config("student"))
+
+    snap_append("Increment", "course:c1")
+    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, course: course) # course snapshot at 1
+    snap_append("Increment", "student:s1") # student has no snapshot: two read groups next build
+
+    store = InterleavingWriter.new(@store) do
+      snap_append("Increment", "course:c1")  # read by neither group: course's read is done
+      snap_append("Increment", "student:s1") # read by the student group
+    end
+    result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots, course: course, student: student)
+
+    truth = DcbEventStore::DecisionModel.build(@store, course: course, student: student)
+    assert_equal 1, result.states[:course], "the course read group ran before its second event existed"
+
+    assert_raises(DcbEventStore::ConditionNotMet, "an append racing the build slipped through the condition") do
+      @store.append([DcbEventStore::Event.new(type: "Increment", tags: ["course:c1"])], result.append_condition)
+    end
+    rebuilt = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, course: course, student: student)
+    assert_equal truth.states, rebuilt.states, "the snapshot baked in the missed event for good"
+  end
+
   # --- writing -------------------------------------------------------------
 
   def test_first_build_writes_a_snapshot_at_the_condition_position
