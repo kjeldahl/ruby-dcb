@@ -120,7 +120,7 @@ course the "popular course" cases hit.
 | Single student (5 events) | 4.1ms | 0.18ms | SQLite is in-process: no round trip |
 | Student+course intersection (0-1 events) | 6.3ms | 0.24ms | same |
 
-### Reads, DecisionModel and append (p50, 50 iterations)
+### DecisionModel and append (p50, 50 iterations)
 
 | Scenario | PostgreSQL | SQLite |
 |----------|-----------|--------|
