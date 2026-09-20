@@ -42,8 +42,10 @@ Single-writer append including decision model build + advisory lock + insert + c
 
 ## Concurrent Throughput
 
-Global advisory lock (`pg_advisory_xact_lock(0)`) serializes all appends.
-This is the intended design — correctness first, optimize later.
+Measured when every append took one global advisory lock
+(`pg_advisory_xact_lock(0)`), so these numbers are a fully serialized
+baseline. Appends have locked per tag since; the lock set as shipped today is
+measured in "Per-tag locks on the tags written" below.
 
 ### Threads (10 threads, shared process)
 
@@ -74,7 +76,7 @@ insert + notify ≈ 70ms.
 
 - **GIN tags scale well** — sub-linear growth, student lookups stay <5ms at 5M events
 - **Decision model cost ∝ largest projection result set** — course subs dominate
-- **Advisory lock is the throughput ceiling** — by design, single-writer serialization
+- **Advisory lock is the throughput ceiling** — single-writer serialization at the time of this table; per-tag locks since (see below)
 - **Near-zero data loss** — 98.9-100% success rate under sustained concurrent load
 
 ## A note on the PostgreSQL read numbers above
@@ -118,7 +120,7 @@ course the "popular course" cases hit.
 | Single student (5 events) | 4.1ms | 0.18ms | SQLite is in-process: no round trip |
 | Student+course intersection (0-1 events) | 6.3ms | 0.24ms | same |
 
-### DecisionModel and append (p50, 50 iterations)
+### Reads, DecisionModel and append (p50, 50 iterations)
 
 | Scenario | PostgreSQL | SQLite |
 |----------|-----------|--------|
@@ -155,6 +157,57 @@ per statement, and `event_tags` matches GIN's selectivity. PostgreSQL's
 advantages appear where SQLite structurally cannot follow: appends that must
 proceed in parallel across disjoint tags, a database shared by many hosts, and
 `LISTEN/NOTIFY` subscriptions that wake without polling.
+
+## Per-tag locks on the tags written (#42)
+
+Before #42 a PostgreSQL append locked only the tags its *condition* named, and
+an unconditional append one global key, so a writer on `course:c1` never waited
+for a condition on `course:c1`. Now every append takes the global key shared
+plus one exclusive key per tag its events carry or its condition names (a
+condition naming no tag takes the global key exclusive). In this workload each
+`StudentSubscribedToCourse` append therefore holds three keys instead of two:
+the student tag its event carries joins the course tag its condition already
+locked.
+
+Same benchmark as the section above, `bundle exec ruby examples/performance.rb
+20000 100`, on an x86_64 Linux container with 4 cores and 15 GB RAM, Ruby 3.3.6,
+PostgreSQL 16.15 (local socket), SQLite 3.53.2 (`sqlite3` gem 2.9.6). A faster
+host than the one the section above was measured on (the same decision model
+builds in a third of the time), so compare within this section only. Two runs
+per PostgreSQL column, one for SQLite, whose lock hook is a no-op and did not
+change.
+
+### Reads, DecisionModel and append (p50, 50 iterations)
+
+| Scenario | PG before #42 | PG after #42 | SQLite |
+|----------|--------------|-------------|--------|
+| read single course (~1,000 events) | 11.2 / 11.4 ms | 11.9 / 11.6 ms | 11.4 ms |
+| DecisionModel.build, popular course | 22.3 / 19.6 ms | 23.1 / 22.4 ms | 24.6 ms |
+| DecisionModel.build, random course | 21.8 / 22.7 ms | 21.7 / 20.7 ms | 26.2 ms |
+| append + condition (new student) | 23.9 / 23.8 ms | 24.0 / 22.1 ms | 26.8 ms |
+| condition check only (no write) | 22.8 / 18.9 ms | 23.1 / 21.5 ms | 23.9 ms |
+
+### Concurrency (ops/sec, succeeded/total)
+
+| | PG before #42 | PG after #42 | SQLite |
+|---|--------------|-------------|--------|
+| 10 threads x 5 ops | 32, 47/50 / 41, 50/50 | 38, 46/50 / 38, 48/50 | 32, 49/50 |
+| 10 procs x 5 ops | 58, 49/50 / 94, 46/50 | 114, 47/50 / 113, 49/50 | 82, 49/50 |
+| 10 procs x 20 ops | 129, 188/200 / 135, 188/200 | 132, 187/200 / 138, 189/200 | 104, 184/200 |
+| 10 procs x 50 ops | 152, 478/500 / 142, 469/500 | 135, 460/500 / 143, 469/500 | 110, 469/500 |
+| 10 procs x 100 ops | 142, 931/1000 / 141, 937/1000 | 138, 932/1000 / 138, 951/1000 | 116, 959/1000 |
+
+### Takeaway
+
+The extra lock per event tag is not measurable: every before/after pair sits
+inside the run-to-run spread of the same code. The workload's contention is
+the course tag both versions already locked (ten workers over 100 courses), and
+the added student key is uncontended (one student per operation), so the only
+new cost is one more `pg_advisory_xact_lock` call inside a transaction that
+already spends ~20 ms folding the popular course. The shared global key costs
+the same: shared locks never wait for each other, and nothing in this workload
+takes it exclusive. The missing operations remain the workload's own constraint
+failures (course full), as before.
 
 ## SQLite tag lookup: `event_tags` table vs `json_each` scan
 
