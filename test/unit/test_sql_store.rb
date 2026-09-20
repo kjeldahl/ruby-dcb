@@ -48,8 +48,8 @@ class TestSqlStore < Minitest::Test
       yield
     end
 
-    def acquire_locks!(condition)
-      @lock_conditions << condition
+    def acquire_locks!(events, condition)
+      @lock_conditions << [events, condition]
     end
 
     def count_matching(_query, _after)
@@ -101,7 +101,7 @@ class TestSqlStore < Minitest::Test
 
   def test_hooks_raise_not_implemented
     refute_implemented(:with_write_transaction)
-    refute_implemented(:acquire_locks!, nil)
+    refute_implemented(:acquire_locks!, [], nil)
     refute_implemented(:count_matching, DcbEventStore::Query.all, nil)
     refute_implemented(:insert_event, event)
     refute_implemented(:fetch_batch, DcbEventStore::Query.all, after: nil, limit: 10)
@@ -148,18 +148,20 @@ class TestSqlStore < Minitest::Test
   end
 
   def test_append_without_condition_still_locks
-    @store.append([event])
+    e = event
+    @store.append([e])
 
-    assert_equal [nil], @store.lock_conditions
+    assert_equal [[[e], nil]], @store.lock_conditions
   end
 
   def test_append_with_satisfied_condition_locks_and_inserts
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: DcbEventStore::Query.all)
 
-    appended = @store.append([event(type: "A")], condition)
+    e = event(type: "A")
+    appended = @store.append([e], condition)
 
     assert_equal 1, appended.size
-    assert_equal [condition], @store.lock_conditions
+    assert_equal [[[e], condition]], @store.lock_conditions
   end
 
   def test_append_with_conflicting_condition_raises_and_writes_nothing

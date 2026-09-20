@@ -40,7 +40,7 @@ module DcbEventStore
       events = Array(events)
       instrument_append(events, condition) do
         with_write_transaction do
-          acquire_locks!(condition)
+          acquire_locks!(events, condition)
 
           sequenced = if condition
                         append_with_condition(events, condition)
@@ -123,9 +123,10 @@ module DcbEventStore
     end
 
     # Takes whatever locks the backend needs so the consistency check and the
-    # inserts cannot interleave with a competing append. May be a no-op when
-    # the write transaction already serializes globally.
-    def acquire_locks!(condition)
+    # inserts cannot interleave with a competing append: one that writes a tag
+    # +condition+ names, or whose condition names a tag +events+ carry. May be
+    # a no-op when the write transaction already serializes globally.
+    def acquire_locks!(events, condition)
       raise NotImplementedError, "#{self.class} must implement #acquire_locks!"
     end
 
