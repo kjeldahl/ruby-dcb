@@ -43,7 +43,7 @@ module DcbEventStore
     # uncommitted append on the very tag being decided about.
     def self.build(store, snapshots: nil, **projections)
       DcbEventStore.instrumentation.instrument(EVENT, projections: projections.keys) do |payload|
-        bound = store.last_position || 0 if snapshots
+        bound = store.last_position.to_i if snapshots
         entries = Snapshotting.load(snapshots, projections)
         groups = read_groups(store, projections, entries, bound)
         events = merge_reads(groups)

@@ -91,6 +91,37 @@ class TestDecisionModelUnit < Minitest::Test
     refute_equal @store.last_position, result.append_condition.after
   end
 
+  # No snapshot store, no head: the build never asks the store for its last
+  # position (one query less), the single read is the whole coverage.
+  def test_without_snapshots_the_head_is_not_consulted
+    store = @store
+    headless = Object.new
+    headless.define_singleton_method(:read) { |query| store.read(query) }
+    headless.define_singleton_method(:read_from) { |query, after:| store.read_from(query, after: after) }
+    appended = @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
+    proj = projection(event_types: ["A"], tags: ["t:1"], handlers: { "A" => ->(s, _e) { s + 1 } })
+
+    result = DcbEventStore::DecisionModel.build(headless, p: proj)
+
+    assert_equal 1, result.states[:p]
+    assert_equal appended.last.sequence_position, result.append_condition.after
+  end
+
+  # The bound applies to the whole-log read of a build without projections
+  # just the same.
+  def test_without_projections_the_head_still_bounds_the_read
+    store = @store
+    stale = Object.new
+    stale.define_singleton_method(:last_position) { 1 }
+    stale.define_singleton_method(:read) { |query| store.read(query) }
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+
+    result = DcbEventStore::DecisionModel.build(stale, snapshots: DcbEventStore::Snapshots::InMemorySnapshotStore.new)
+
+    assert_empty result.states
+    assert_equal 1, result.append_condition.after
+  end
+
   # The head is taken before the reads and bounds them: an append that
   # lands in between shows up in a read but was not covered by the reads
   # issued earlier, so it is neither folded nor guarded.
