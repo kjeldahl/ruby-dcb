@@ -39,7 +39,8 @@ module DcbEventStore
     attr_reader :name, :version, :every
 
     def initialize(name:, version:, every: 1, dump: nil, load: nil)
-      raise ArgumentError, "every must be >= 1" unless every >= 1
+      raise ArgumentError, "version is required" if version.nil?
+      raise ArgumentError, "every must be an Integer >= 1" unless every.instance_of?(Integer) && every >= 1
 
       @name = name.to_s
       @version = version
