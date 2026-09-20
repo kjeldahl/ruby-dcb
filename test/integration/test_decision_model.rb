@@ -62,14 +62,14 @@ class TestDecisionModelPostgresGap < Minitest::Test
 
   def sub(tag) = DcbEventStore::Event.new(type: "Sub", tags: [tag])
 
-  # A conditional append on course:c1 that has taken its lock and its
-  # sequence position but not committed yet.
+  # A conditional append on course:c1 that has taken its locks (what
+  # PostgresStore#acquire_locks! takes for one event tagged course:c1 under
+  # a condition on that tag) and its sequence position but not committed yet.
   def start_slow_append
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query, after: 1)
-    keys = DcbEventStore::PostgresStore::LockKeys.for(condition)
     @slow.exec("BEGIN")
     @slow_open = true
-    @slow.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", ["{#{keys.join(',')}}"])
+    DcbEventStore::PostgresStore.new(@slow).send(:acquire_locks!, [sub("course:c1")], condition)
     @slow.exec_params(
       "INSERT INTO events (event_id, type, data, tags, schema_version) VALUES ($1, 'Sub', '{}', '{course:c1}', 1)",
       [SecureRandom.uuid]
