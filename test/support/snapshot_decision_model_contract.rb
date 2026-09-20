@@ -110,6 +110,61 @@ module SnapshotDecisionModelContract
     end
   end
 
+  # Appends to the store once the first read group has been consumed, so
+  # events land between two of a build's reads: what a concurrent writer
+  # does. Only the reads are delegated.
+  class InterleavingWriter
+    def initialize(store, &between)
+      @store = store
+      @between = between
+      @reads = 0
+    end
+
+    def last_position = @store.last_position
+    def read(query) = consume(@store.read(query))
+    def read_from(query, after:) = consume(@store.read_from(query, after: after))
+
+    private
+
+    def consume(events)
+      events = events.to_a
+      @reads += 1
+      @between.call if @reads == 1
+      events
+    end
+  end
+
+  # A build with snapshots issues one read per snapshot position, at
+  # different times. Events committed between two of those reads are missed
+  # by the earlier group; if the later group's events pushed +after+ past
+  # them, the condition would accept an append it should reject and the
+  # snapshot written there would never fold the missed event. So every
+  # read is bounded by the head taken before the first one, and +after+
+  # never exceeds what every read covered.
+  def test_events_landing_between_two_read_groups_are_guarded
+    course = snap_counter("course:c1", snapshot: snap_config("course"))
+    student = snap_counter("student:s1", snapshot: snap_config("student"))
+
+    snap_append("Increment", "course:c1")
+    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, course: course) # course snapshot at 1
+    snap_append("Increment", "student:s1") # student has no snapshot: two read groups next build
+
+    store = InterleavingWriter.new(@store) do
+      snap_append("Increment", "course:c1")  # read by neither group: course's read is done
+      snap_append("Increment", "student:s1") # read by the student group
+    end
+    result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots, course: course, student: student)
+
+    truth = DcbEventStore::DecisionModel.build(@store, course: course, student: student)
+    assert_equal 1, result.states[:course], "the course read group ran before its second event existed"
+
+    assert_raises(DcbEventStore::ConditionNotMet, "an append racing the build slipped through the condition") do
+      @store.append([DcbEventStore::Event.new(type: "Increment", tags: ["course:c1"])], result.append_condition)
+    end
+    rebuilt = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, course: course, student: student)
+    assert_equal truth.states, rebuilt.states, "the snapshot baked in the missed event for good"
+  end
+
   # --- writing -------------------------------------------------------------
 
   def test_first_build_writes_a_snapshot_at_the_condition_position
@@ -247,32 +302,31 @@ module SnapshotDecisionModelContract
     assert_equal 9, entry.state
   end
 
-  # The head moves past a snapshot through events the projection does not
-  # even select; the snapshot follows anyway (state unchanged, position at
-  # the head), so the next catch-up read starts where the log ends.
-  def test_a_snapshot_follows_the_log_head_past_unrelated_events
-    snap_append("Increment", "counter:a")
-    config = snap_config("a", every: 2)
+  # The log grows past a snapshot through events the projection does not
+  # select. The snapshot stays where it is and the condition guards the
+  # last matching event, not the head: on PostgreSQL the head can lie past
+  # an uncommitted append on the tag itself, which only the position of a
+  # matching event (committed in order under the tag's lock) is safe
+  # against. Every later catch-up read starts at the snapshot again.
+  def test_a_snapshot_stays_at_its_last_matching_event_while_the_log_grows
+    matching = snap_append("Increment", "counter:a").last.sequence_position
+    config = snap_config("a", every: 1)
     proj = snap_counter("counter:a", snapshot: config)
     key = config.key(proj.query)
 
     DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
-    first = snapshots.fetch(key).position
+    assert_equal matching, snapshots.fetch(key).position
 
-    snap_append("Increment", "counter:z")
-    DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
-    assert_equal first, snapshots.fetch(key).position, "one unrelated event is below every: 2"
+    3.times { snap_append("Increment", "counter:z") }
+    payload = snap_decision_payload { @result = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj) }
 
-    head = snap_append("Increment", "counter:z").last.sequence_position
-    result = DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj)
-
-    entry = snapshots.fetch(key)
-    assert_equal head, entry.position
-    assert_equal 1, entry.state
-    assert_equal head, result.append_condition.after
+    assert_equal matching, snapshots.fetch(key).position
+    assert_equal matching, @result.append_condition.after
+    assert_equal 0, payload[:snapshots_written]
+    refute_equal @store.last_position, @result.append_condition.after
 
     reads = snap_reads { DcbEventStore::DecisionModel.build(@store, snapshots: snapshots, a: proj) }
-    assert_equal head, reads[0].payload[:after]
+    assert_equal matching, reads[0].payload[:after]
   end
 
   # Two projections over the same events, one snapshotted and one not. The
@@ -638,11 +692,8 @@ module SnapshotDecisionModelContract
     assert_equal plain.states, snapshotted.states, "states diverged once snapshots were used"
     # Wrapped in arrays so an empty store's nil == nil does not trip
     # Minitest's assert_equal-nil deprecation.
-    assert_equal [@store.last_position], [snapshotted.append_condition.after],
-                 "a snapshotted build must guard up to the log head"
-    if plain.append_condition.after
-      assert_operator plain.append_condition.after, :<=, snapshotted.append_condition.after
-    end
+    assert_equal [plain.append_condition.after], [snapshotted.append_condition.after],
+                 "a snapshotted build must guard exactly what the plain build guards"
     assert_equal plain.append_condition.fail_if_events_match,
                  snapshotted.append_condition.fail_if_events_match
     snapshotted

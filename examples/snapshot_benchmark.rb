@@ -40,7 +40,7 @@ module SnapshotBenchmark
   end
 
   def self.projections(student_id, course_id, snapshot: nil)
-    snap = ->(name) { snapshot && Snap.new(name: name, every: snapshot) }
+    snap = ->(name) { snapshot && Snap.new(name: name, version: 1, every: snapshot) }
     {
       course_exists: DcbEventStore::Projection.new(
         initial_state: false, handlers: { "CourseDefined" => ->(_s, _e) { true } },
