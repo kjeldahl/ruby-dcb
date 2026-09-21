@@ -15,73 +15,85 @@ module DcbEventStore
     #
     # projection_snapshots, written by Snapshots::SqliteSnapshotStore, is the
     # one mutable table: no trigger.
+    #
+    # Installed once per namespace (see Namespace): each namespace gets its
+    # own three tables and four triggers under its prefix. Trigger names are
+    # database-wide in SQLite, so they carry the table name.
     module Schema
-      CREATE_SQL = <<~SQL.freeze
-        CREATE TABLE IF NOT EXISTS events (
-          sequence_position INTEGER PRIMARY KEY AUTOINCREMENT,
-          event_id          TEXT NOT NULL UNIQUE,
-          type              TEXT NOT NULL,
-          data              TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
-          tags              TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
-          causation_id      TEXT,
-          correlation_id    TEXT,
-          schema_version    INTEGER NOT NULL DEFAULT 1,
-          created_at        INTEGER NOT NULL DEFAULT (CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER))
-        );
-        CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
-        CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events (correlation_id);
-
-        CREATE TABLE IF NOT EXISTS event_tags (
-          tag               TEXT NOT NULL,
-          sequence_position INTEGER NOT NULL REFERENCES events(sequence_position),
-          PRIMARY KEY (tag, sequence_position)
-        ) WITHOUT ROWID;
-
-        CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
-        BEGIN
-          SELECT RAISE(ABORT, 'events table is append-only: UPDATE not allowed');
-        END;
-        CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
-        BEGIN
-          SELECT RAISE(ABORT, 'events table is append-only: DELETE not allowed');
-        END;
-        CREATE TRIGGER IF NOT EXISTS event_tags_no_update BEFORE UPDATE ON event_tags
-        BEGIN
-          SELECT RAISE(ABORT, 'event_tags table is append-only: UPDATE not allowed');
-        END;
-        CREATE TRIGGER IF NOT EXISTS event_tags_no_delete BEFORE DELETE ON event_tags
-        BEGIN
-          SELECT RAISE(ABORT, 'event_tags table is append-only: DELETE not allowed');
-        END;
-
-        CREATE TABLE IF NOT EXISTS projection_snapshots (
-          key        TEXT PRIMARY KEY,
-          position   INTEGER NOT NULL,
-          state      TEXT NOT NULL CHECK (json_valid(state)),
-          updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-        );
-      SQL
-
-      # event_tags first: it references events. DROP TABLE does not fire the
-      # append-only triggers, so dropping needs no extra ceremony.
-      DROP_SQL = <<~SQL.freeze
-        DROP TABLE IF EXISTS event_tags;
-        DROP TABLE IF EXISTS events;
-        DROP TABLE IF EXISTS projection_snapshots;
-      SQL
-
       # How long a connection waits for the database's write lock before it
       # gives up with SQLite3::BusyException.
       BUSY_TIMEOUT_MS = 5000
 
-      def self.create!(db)
+      def self.create!(db, namespace: nil)
         configure!(db)
-        db.execute_batch(CREATE_SQL)
+        db.execute_batch(create_sql(namespace))
       end
 
-      def self.drop!(db)
-        db.execute_batch(DROP_SQL)
+      def self.drop!(db, namespace: nil)
+        db.execute_batch(drop_sql(namespace))
       end
+
+      # The full DDL for +namespace+ (nil = the default), idempotent.
+      def self.create_sql(namespace = nil)
+        namespace = Namespace.wrap(namespace)
+        events = namespace.events_table
+        event_tags = namespace.event_tags_table
+        <<~SQL
+          CREATE TABLE IF NOT EXISTS #{events} (
+            sequence_position INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id          TEXT NOT NULL UNIQUE,
+            type              TEXT NOT NULL,
+            data              TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+            tags              TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+            causation_id      TEXT,
+            correlation_id    TEXT,
+            schema_version    INTEGER NOT NULL DEFAULT 1,
+            created_at        INTEGER NOT NULL DEFAULT (CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER))
+          );
+          CREATE INDEX IF NOT EXISTS idx_#{events}_type ON #{events} (type);
+          CREATE INDEX IF NOT EXISTS idx_#{events}_correlation_id ON #{events} (correlation_id);
+
+          CREATE TABLE IF NOT EXISTS #{event_tags} (
+            tag               TEXT NOT NULL,
+            sequence_position INTEGER NOT NULL REFERENCES #{events}(sequence_position),
+            PRIMARY KEY (tag, sequence_position)
+          ) WITHOUT ROWID;
+
+          #{append_only_triggers(events)}
+          #{append_only_triggers(event_tags)}
+          CREATE TABLE IF NOT EXISTS #{namespace.snapshots_table} (
+            key        TEXT PRIMARY KEY,
+            position   INTEGER NOT NULL,
+            state      TEXT NOT NULL CHECK (json_valid(state)),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          );
+        SQL
+      end
+
+      # event_tags first: it references events. DROP TABLE does not fire the
+      # append-only triggers, so dropping needs no extra ceremony.
+      def self.drop_sql(namespace = nil)
+        namespace = Namespace.wrap(namespace)
+        <<~SQL
+          DROP TABLE IF EXISTS #{namespace.event_tags_table};
+          DROP TABLE IF EXISTS #{namespace.events_table};
+          DROP TABLE IF EXISTS #{namespace.snapshots_table};
+        SQL
+      end
+
+      def self.append_only_triggers(table)
+        <<~SQL
+          CREATE TRIGGER IF NOT EXISTS #{table}_no_update BEFORE UPDATE ON #{table}
+          BEGIN
+            SELECT RAISE(ABORT, '#{table} table is append-only: UPDATE not allowed');
+          END;
+          CREATE TRIGGER IF NOT EXISTS #{table}_no_delete BEFORE DELETE ON #{table}
+          BEGIN
+            SELECT RAISE(ABORT, '#{table} table is append-only: DELETE not allowed');
+          END;
+        SQL
+      end
+      private_class_method :append_only_triggers
 
       # Connection settings the store relies on: WAL so readers never block
       # the single writer, enforced foreign keys, a busy timeout so a
