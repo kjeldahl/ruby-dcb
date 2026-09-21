@@ -23,9 +23,6 @@ module DcbEventStore
   # wait for each other. The schema must have been installed for that
   # namespace (Schema.create!(conn, namespace: ...)).
   class PostgresStore < SqlStore
-    # The Namespace this store reads and writes.
-    attr_reader :namespace
-
     # Decoders the store installs on its connection. Only created_at is
     # touched: TIMESTAMPTZ (OID 1184) comes back as a Time the driver built
     # in C, which saves the row mapper a parse on every row read. Everything
@@ -40,10 +37,9 @@ module DcbEventStore
     end
 
     def initialize(conn, upcaster: nil, subscribe_instrumentation: :event, namespace: nil)
-      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
+      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation, namespace: namespace)
       @conn = conn
       @conn.type_map_for_results = self.class.result_type_map
-      @namespace = Namespace.wrap(namespace)
       @dialect = Dialect.new(namespace: @namespace)
       @sql = SqlBuilder.new(@dialect, namespace: @namespace)
       @row_mapper = RowMapper.new(@dialect, @upcaster)

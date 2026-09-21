@@ -55,7 +55,7 @@ shipping = DcbEventStore::PostgresStore.new(shipping_conn, namespace: "shipping"
 billing_snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn, namespace: "billing")
 ```
 
-The same `namespace:` goes to `SqliteStore`, `SqliteStore::Schema.create!`/`drop!`, `SqliteSnapshotStore` and, for parity, `InMemoryStore` (where every instance is its own log anyway). Without one, a store uses the default namespace: the unprefixed `events`, `event_tags` and `projection_snapshots` tables, exactly as before, so existing deployments need no migration. A name is lowercase letters, digits and underscores (it is spliced into identifiers, so it is validated rather than bound), at most 37 characters, and prefixes every object: `billing_events`, `billing_event_tags`, `billing_projection_snapshots`, channel `billing_events_appended`. `Schema.drop!(conn, namespace: "billing")` removes that namespace's tables and nothing else. `store.namespace` returns the `DcbEventStore::Namespace` in use (`#name`, `#events_table`, ...).
+The same `namespace:` goes to `SqliteStore`, `SqliteStore::Schema.create!`/`drop!`, `SqliteSnapshotStore` and, for parity, `InMemoryStore` and `InMemorySnapshotStore` (where every instance is its own log anyway). Instrumentation payloads carry it as `namespace:`. Without one, a store uses the default namespace: the unprefixed `events`, `event_tags` and `projection_snapshots` tables, exactly as before, so existing deployments need no migration. A name is lowercase letters, digits and underscores (it is spliced into identifiers, so it is validated rather than bound), at most 37 characters, and prefixes every object: `billing_events`, `billing_event_tags`, `billing_projection_snapshots`, channel `billing_events_appended`. `Schema.drop!(conn, namespace: "billing")` removes that namespace's tables and nothing else. `store.namespace` returns the `DcbEventStore::Namespace` in use (`#name`, `#events_table`, ...).
 
 Each store still owns its connection (next section), so two namespaces mean two connections when both append or subscribe concurrently. Events cannot be appended atomically across namespaces, and a read never spans them: that is the point of a bounded context. For an ordered read across contexts, keep them in one namespace and separate them by tags instead.
 
@@ -281,12 +281,14 @@ Emitted events and payloads:
 
 | Event | Emitted by | Payload |
 |-------|------------|---------|
-| `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
-| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
+| `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `namespace:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
+| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `namespace:`, `query:`, `after:`, `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
 | `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
-| `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
-| `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
+| `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `namespace:`, `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
+| `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `namespace:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `namespace:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
+
+`namespace:` is the emitting store's namespace name (see [Namespaces](#namespaces-several-event-logs-in-one-database)), `nil` in the default namespace: the log subscribers drop `nil` values, so single-namespace logs read as before, and `AppsignalSubscriber` adds a `namespace` tag only when one is named.
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
 

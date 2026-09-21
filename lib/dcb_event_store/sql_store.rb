@@ -18,9 +18,14 @@ module DcbEventStore
 
     BATCH_SIZE = 1000
 
-    def initialize(upcaster: nil, subscribe_instrumentation: :event)
+    # The Namespace this store reads and writes (see Namespace): which event
+    # log in the database is its own.
+    attr_reader :namespace
+
+    def initialize(upcaster: nil, subscribe_instrumentation: :event, namespace: nil)
       @upcaster = upcaster
       @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
+      @namespace = Namespace.wrap(namespace)
     end
 
     def read(query)

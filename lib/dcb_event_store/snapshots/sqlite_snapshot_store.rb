@@ -6,9 +6,13 @@ module DcbEventStore
     # SqliteStore::Schema.create!), same forward-only upsert, state as JSON
     # text, same +namespace:+ (see Namespace).
     class SqliteSnapshotStore
+      # The Namespace whose snapshot table this store reads and writes.
+      attr_reader :namespace
+
       def initialize(db, namespace: nil)
         @db = db
-        @table = Namespace.wrap(namespace).snapshots_table
+        @namespace = Namespace.wrap(namespace)
+        @table = @namespace.snapshots_table
         @upsert_sql = <<~SQL
           INSERT INTO #{@table} (key, position, state)
           VALUES (?, ?, ?)
