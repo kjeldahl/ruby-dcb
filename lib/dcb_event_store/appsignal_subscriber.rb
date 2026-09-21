@@ -19,7 +19,8 @@ module DcbEventStore
   # grows. The snapshot counters give the hit rate.
   #
   # Metrics are tagged with the emitting store (demodulized, e.g.
-  # store=PostgresStore); dcb.subscribe.delivered additionally carries
+  # store=PostgresStore) and, outside the default namespace, with
+  # namespace=<name>; dcb.subscribe.delivered additionally carries
   # phase=live/catch_up. Delivery lag is recorded only for the :live phase
   # - catch-up replays history, where large lag is expected and would
   # poison the staleness signal - and comes from lag: (per-event mode) or
@@ -83,9 +84,13 @@ module DcbEventStore
       "#{@prefix}.#{operation}.#{name}"
     end
 
+    # store (demodulized) and, outside the default namespace, namespace.
     def tags_for(event)
       store = event.payload[:store]
-      store ? { store: store.split("::").last } : {}
+      tags = store ? { store: store.split("::").last } : {}
+      namespace = event.payload[:namespace]
+      tags[:namespace] = namespace if namespace
+      tags
     end
 
     def record_append(event, tags)

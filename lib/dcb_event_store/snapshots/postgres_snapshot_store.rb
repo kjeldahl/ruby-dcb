@@ -15,9 +15,13 @@ module DcbEventStore
     # (see Namespace); give it the namespace of the store the snapshots are
     # taken from.
     class PostgresSnapshotStore
+      # The Namespace whose snapshot table this store reads and writes.
+      attr_reader :namespace
+
       def initialize(conn, namespace: nil)
         @conn = conn
-        @table = Namespace.wrap(namespace).snapshots_table
+        @namespace = Namespace.wrap(namespace)
+        @table = @namespace.snapshots_table
         @upsert_sql = <<~SQL
           INSERT INTO #{@table} (key, position, state, updated_at)
           VALUES ($1, $2, $3::jsonb, now())

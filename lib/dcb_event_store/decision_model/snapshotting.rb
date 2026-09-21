@@ -14,8 +14,8 @@ module DcbEventStore
         keys = projections.filter_map { |name, proj| [name, proj.snapshot.key(proj.query)] if proj.snapshot }
         return {} if keys.empty?
 
-        payload = { store: snapshots.class.name, operation: :load, projections: keys.map(&:first),
-                    requested: keys.size }
+        payload = identity(snapshots).merge(operation: :load, projections: keys.map(&:first),
+                                            requested: keys.size)
         DcbEventStore.instrumentation.instrument(StoreInstrumentation::SNAPSHOT_EVENT, payload) do |inner|
           found = snapshots.fetch_many(keys.map(&:last))
           inner[:loaded] = found.size
@@ -44,15 +44,23 @@ module DcbEventStore
         end
         due.each do |name, proj|
           position = folded.positions.fetch(name)
-          payload = { store: snapshots.class.name, operation: :write, projection: name,
-                      key: proj.snapshot.key(proj.query), position: position,
-                      folded_count: folded.events_by_projection.fetch(name).size }
+          payload = identity(snapshots).merge(operation: :write, projection: name,
+                                              key: proj.snapshot.key(proj.query), position: position,
+                                              folded_count: folded.events_by_projection.fetch(name).size)
           DcbEventStore.instrumentation.instrument(StoreInstrumentation::SNAPSHOT_EVENT, payload) do
             state = proj.snapshot.dump(folded.states.fetch(name))
             snapshots.store(payload.fetch(:key), position: position, state: state)
           end
         end
         due.size
+      end
+
+      # The store: and namespace: a snapshot.dcb payload starts with: the
+      # snapshot store's class and its namespace name (nil in the default
+      # namespace, and for a snapshot store that has no notion of one).
+      def self.identity(snapshots)
+        namespace = snapshots.namespace.name if snapshots.respond_to?(:namespace)
+        { store: snapshots.class.name, namespace: namespace }
       end
 
       # A snapshot is due when the projection has none yet (and its read
@@ -65,7 +73,7 @@ module DcbEventStore
         position - entry.position >= snapshot.every
       end
 
-      private_class_method :entries_from, :due?
+      private_class_method :entries_from, :identity, :due?
     end
   end
 end

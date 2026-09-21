@@ -32,17 +32,13 @@ module DcbEventStore
   class SqliteStore < SqlStore
     attr_reader :poll_interval
 
-    # The Namespace this store reads and writes.
-    attr_reader :namespace
-
     def initialize(db, upcaster: nil, subscribe_instrumentation: :event, poll_interval: 0.1, namespace: nil)
-      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
+      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation, namespace: namespace)
       @db = db
       # The row mapper reads rows by column name, so hash rows are not
       # optional; a connection that was opened elsewhere may not have them.
       @db.results_as_hash = true
       @poll_interval = poll_interval
-      @namespace = Namespace.wrap(namespace)
       @dialect = Dialect.new(namespace: @namespace)
       @sql = SqlBuilder.new(@dialect, namespace: @namespace)
       @row_mapper = RowMapper.new(@dialect, @upcaster)

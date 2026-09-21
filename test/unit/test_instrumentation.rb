@@ -62,6 +62,30 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
     assert_equal 3, payload[:last_position]
   end
 
+  # namespace: is the store's namespace name, nil in the default one, so a
+  # log line for the default namespace carries nothing new (the log
+  # subscribers drop nil values) and one for a named namespace names it.
+  def test_payloads_carry_the_namespace
+    @store.append([DcbEventStore::Event.new(type: "A")])
+    @store.read(DcbEventStore::Query.all).to_a
+    @store.subscribe(DcbEventStore::Query.all) { |_e| nil }
+
+    assert_equal %w[append.dcb read.dcb subscribe.dcb], @events.map(&:name).uniq
+    assert(@events.all? { |e| e.payload.key?(:namespace) && e.payload[:namespace].nil? })
+
+    @events.clear
+    billing = DcbEventStore::InMemoryStore.new(namespace: "billing", subscribe_instrumentation: :batch)
+    billing.append([DcbEventStore::Event.new(type: "A")])
+    billing.read(DcbEventStore::Query.all).to_a
+    billing.subscribe(DcbEventStore::Query.all) { |_e| nil }
+
+    assert_equal %w[append.dcb read.dcb subscribe.dcb], @events.map(&:name).uniq
+    assert_equal ["billing"], payload_values(:namespace).uniq
+    assert_equal ["DcbEventStore::InMemoryStore"], payload_values(:store).uniq
+  end
+
+  def payload_values(key) = @events.map { |e| e.payload[key] }
+
   def test_append_reports_condition_presence
     query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Other"])])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)

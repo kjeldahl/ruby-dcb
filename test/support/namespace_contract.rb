@@ -91,6 +91,9 @@ module NamespaceContract
     default_snapshots = build_namespaced_snapshot_store(nil)
     billing_snapshots = build_namespaced_snapshot_store("billing")
 
+    assert_predicate default_snapshots.namespace, :default?
+    assert_equal "billing", billing_snapshots.namespace.name
+
     default_snapshots.store("k", position: 1, state: { n: 1 })
     billing_snapshots.store("k", position: 2, state: { n: 2 })
 

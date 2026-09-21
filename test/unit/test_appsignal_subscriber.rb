@@ -43,6 +43,22 @@ class TestAppsignalSubscriber < Minitest::Test
     assert_empty @appsignal.counters
   end
 
+  # A named namespace becomes a tag; the default one (nil) adds none, so
+  # single-namespace deployments keep the metrics they had.
+  def test_tags_with_the_namespace_when_the_payload_names_one
+    @subscriber.call(build_event(name: "read.dcb", payload: {store: "DcbEventStore::PostgresStore", namespace: nil}))
+    @subscriber.call(build_event(name: "read.dcb",
+                                 payload: {store: "DcbEventStore::PostgresStore", namespace: "billing"}))
+    @subscriber.call(build_event(payload: {store: "DcbEventStore::PostgresStore", namespace: "billing",
+                                           appended_count: 1}))
+
+    assert_equal [["dcb.read.duration", 500.0, {store: "PostgresStore"}],
+                  ["dcb.read.duration", 500.0, {store: "PostgresStore", namespace: "billing"}],
+                  ["dcb.append.duration", 500.0, {store: "PostgresStore", namespace: "billing"}]],
+                 @appsignal.distributions
+    assert_equal [["dcb.append.events", 1, {store: "PostgresStore", namespace: "billing"}]], @appsignal.counters
+  end
+
   def test_events_without_store_payload_have_no_tags
     @subscriber.call(build_event(name: "projection.dcb", payload: {event_types: ["A"]}))
 
