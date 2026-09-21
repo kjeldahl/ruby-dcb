@@ -16,7 +16,16 @@ module DcbEventStore
   # queries on the same connection would see them decoded by the store's map
   # and would race the store's transactions. Give the application its own
   # connection, or give the store one per thread.
+  #
+  # +namespace:+ selects which event log in the database the store works on
+  # (see Namespace): its tables, its NOTIFY channel and its advisory-lock key
+  # space are all its own, so stores in different namespaces neither see nor
+  # wait for each other. The schema must have been installed for that
+  # namespace (Schema.create!(conn, namespace: ...)).
   class PostgresStore < SqlStore
+    # The Namespace this store reads and writes.
+    attr_reader :namespace
+
     # Decoders the store installs on its connection. Only created_at is
     # touched: TIMESTAMPTZ (OID 1184) comes back as a Time the driver built
     # in C, which saves the row mapper a parse on every row read. Everything
@@ -30,12 +39,13 @@ module DcbEventStore
       map
     end
 
-    def initialize(conn, upcaster: nil, subscribe_instrumentation: :event)
+    def initialize(conn, upcaster: nil, subscribe_instrumentation: :event, namespace: nil)
       super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
       @conn = conn
       @conn.type_map_for_results = self.class.result_type_map
-      @dialect = Dialect.new
-      @sql = SqlBuilder.new(@dialect)
+      @namespace = Namespace.wrap(namespace)
+      @dialect = Dialect.new(namespace: @namespace)
+      @sql = SqlBuilder.new(@dialect, namespace: @namespace)
       @row_mapper = RowMapper.new(@dialect, @upcaster)
     end
 
@@ -47,19 +57,23 @@ module DcbEventStore
     end
 
     def max_position
-      value = @conn.exec("SELECT max(sequence_position) FROM events")[0]["max"]
+      value = @conn.exec("SELECT max(sequence_position) FROM #{@namespace.events_table}")[0]["max"]
       value && Integer(value)
     end
 
     # The global key first, then the tag keys in sorted order, so every
-    # append acquires in one order (see LockKeys).
+    # append acquires in one order (see LockKeys). Every key is shifted by
+    # the namespace's offset, which keeps namespaces from locking each other
+    # out and leaves the default namespace's keys untouched.
     def acquire_locks!(events, condition)
       locks = LockKeys.for(events, condition)
+      offset = @namespace.lock_offset
       fn = locks.global == :exclusive ? "pg_advisory_xact_lock" : "pg_advisory_xact_lock_shared"
-      @conn.exec("SELECT #{fn}(#{LockKeys::APPEND_LOCK_KEY})")
+      @conn.exec("SELECT #{fn}(#{offset + LockKeys::APPEND_LOCK_KEY})")
       return if locks.tags.empty?
 
-      @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", ["{#{locks.tags.join(',')}}"])
+      keys = locks.tags.map { |key| offset + key }
+      @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", ["{#{keys.join(',')}}"])
     end
 
     def count_matching(query, after)
@@ -79,7 +93,7 @@ module DcbEventStore
       result = @conn.exec_params(
         <<~SQL,
           WITH cond AS (#{cond_sql})
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          INSERT INTO #{@namespace.events_table} (event_id, type, data, tags, causation_id, correlation_id, schema_version)
           SELECT v.* FROM (VALUES #{value_rows.join(', ')})
             AS v(event_id, type, data, tags, causation_id, correlation_id, schema_version)
           WHERE NOT EXISTS (SELECT 1 FROM cond WHERE count > 0)
@@ -110,17 +124,17 @@ module DcbEventStore
     end
 
     def notify_appended(position)
-      @conn.exec("NOTIFY events_appended, '#{position}'")
+      @conn.exec("NOTIFY #{@namespace.channel}, '#{position}'")
     end
 
     def listen
-      @conn.exec("LISTEN events_appended")
+      @conn.exec("LISTEN #{@namespace.channel}")
     end
 
     # Called from subscribe's ensure block, where the connection may already
     # be gone (closed socket, failed subscription), so failures are ignored.
     def unlisten
-      @conn.exec("UNLISTEN events_appended")
+      @conn.exec("UNLISTEN #{@namespace.channel}")
     rescue StandardError
       nil
     end

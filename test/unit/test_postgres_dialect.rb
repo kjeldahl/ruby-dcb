@@ -115,6 +115,13 @@ class TestPostgresDialect < Minitest::Test
     assert_equal expected, @dialect.insert_sql
   end
 
+  def test_namespaced_insert_sql_writes_the_namespaced_table
+    dialect = DcbEventStore::PostgresStore::Dialect.new(namespace: "billing")
+
+    assert_includes dialect.insert_sql, "INSERT INTO billing_events (event_id,"
+    assert_equal @dialect.insert_sql.sub("INTO events", "INTO billing_events"), dialect.insert_sql
+  end
+
   def test_insert_params_are_in_column_order
     assert_equal ["id-1", "A", '{"n":1}', "{t1}", "c-1", "r-1", 1], @dialect.insert_params(event)
   end

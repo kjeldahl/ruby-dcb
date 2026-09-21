@@ -13,10 +13,19 @@ module DcbEventStore
     # of bind parameters whatever the list length, just like PG's = ANY) and
     # against the event_tags index table for containment.
     #
+    # +namespace+ names the events and event_tags tables the statements
+    # touch (see Namespace).
+    #
     # Pure: no connection, no I/O.
     class Dialect
       # Resolution the created_at column is stored in.
       MICROSECONDS_PER_SECOND = 1_000_000
+
+      def initialize(namespace: Namespace::DEFAULT)
+        namespace = Namespace.wrap(namespace)
+        @events = namespace.events_table
+        @event_tags = namespace.event_tags_table
+      end
 
       # Bind parameters are positional in SQLite, so a placeholder is the same
       # "?" wherever it appears; the index the interface passes is unused.
@@ -49,7 +58,7 @@ module DcbEventStore
           conditions << "sequence_position > ?"
         end
         params << wanted.size
-        "sequence_position IN (SELECT sequence_position FROM event_tags " \
+        "sequence_position IN (SELECT sequence_position FROM #{@event_tags} " \
           "WHERE #{conditions.join(' AND ')} " \
           "GROUP BY sequence_position HAVING COUNT(*) = ?)"
       end
@@ -72,7 +81,7 @@ module DcbEventStore
       # and returning the generated columns. Takes #insert_params.
       def insert_sql
         <<~SQL
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          INSERT INTO #{@events} (event_id, type, data, tags, causation_id, correlation_id, schema_version)
           VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(event_id) DO NOTHING
           RETURNING sequence_position, created_at
@@ -82,7 +91,7 @@ module DcbEventStore
       # Insert of one row into the tag index table, taking the tag and the
       # sequence position the insert above returned.
       def insert_tag_sql
-        "INSERT INTO event_tags (tag, sequence_position) VALUES (?, ?)"
+        "INSERT INTO #{@event_tags} (tag, sequence_position) VALUES (?, ?)"
       end
 
       # The bind parameters of one event, in the column order used by

@@ -8,12 +8,20 @@ module DcbEventStore
   # Unlike PostgresStore, #subscribe does not block waiting for
   # notifications; it catches up on existing events and then delivers
   # matching events synchronously as they are appended.
+  #
+  # Every instance is its own log, so +namespace:+ changes nothing here; it
+  # is accepted (and validated) so a store can be built the same way
+  # whichever backend it turns out to be.
   class InMemoryStore
     include StoreInstrumentation
 
-    def initialize(upcaster: nil, subscribe_instrumentation: :event)
+    # The Namespace this store was built with.
+    attr_reader :namespace
+
+    def initialize(upcaster: nil, subscribe_instrumentation: :event, namespace: nil)
       @upcaster = upcaster
       @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
+      @namespace = Namespace.wrap(namespace)
       @rows = []
       @ids = Set.new
       @next_position = 1

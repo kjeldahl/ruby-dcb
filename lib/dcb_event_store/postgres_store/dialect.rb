@@ -12,10 +12,13 @@ module DcbEventStore
     # the parameters they need onto it and return the SQL fragment referring to
     # them, so a dialect is free to spend more (or fewer) parameters per clause.
     #
+    # +namespace+ names the events table the insert writes (see Namespace).
+    #
     # Pure: no connection, no I/O.
     class Dialect
-      def initialize
+      def initialize(namespace: Namespace::DEFAULT)
         @codec = ArrayCodec.new
+        @events = Namespace.wrap(namespace).events_table
       end
 
       # Bind-parameter reference for the +index+th parameter (1-based).
@@ -61,7 +64,7 @@ module DcbEventStore
       # and returning the generated columns. Takes #insert_params.
       def insert_sql
         <<~SQL
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version)
+          INSERT INTO #{@events} (event_id, type, data, tags, causation_id, correlation_id, schema_version)
           VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7)
           ON CONFLICT (event_id) DO NOTHING
           RETURNING sequence_position, created_at
