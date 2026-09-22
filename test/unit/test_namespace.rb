@@ -116,6 +116,13 @@ class TestNamespace < Minitest::Test
     assert_same ns, Namespace.wrap(ns)
   end
 
+  # A subclass is a Namespace too: passed through as it is, not rebuilt.
+  def test_wrap_passes_a_subclass_instance_through
+    sub = Class.new(Namespace).new("billing")
+
+    assert_same sub, Namespace.wrap(sub)
+  end
+
   def test_wrap_builds_from_nil_or_a_name
     assert_equal Namespace::DEFAULT, Namespace.wrap(nil)
     assert_equal Namespace.new("billing"), Namespace.wrap("billing")
@@ -136,6 +143,13 @@ class TestNamespace < Minitest::Test
     assert_equal Namespace.new("billing").hash, Namespace.new("billing").hash
     assert_equal 1, [Namespace.new("billing"), Namespace.new("billing")].uniq.size
     assert Namespace.new("billing").eql?(Namespace.new("billing"))
+  end
+
+  def test_equality_holds_across_subclasses
+    sub = Class.new(Namespace).new("billing")
+
+    assert_equal Namespace.new("billing"), sub
+    assert_equal sub, Namespace.new("billing")
   end
 
   def test_to_s_is_the_name_or_empty

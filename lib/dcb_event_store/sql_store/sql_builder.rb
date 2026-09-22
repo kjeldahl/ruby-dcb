@@ -13,9 +13,9 @@ module DcbEventStore
     # pair) ready to hand to the driver.
     #
     # +namespace+ names the events table the statements read (see
-    # Namespace); the default is the plain "events".
+    # Namespace); nil, the default, is the plain "events".
     class SqlBuilder
-      def initialize(dialect, namespace: Namespace::DEFAULT)
+      def initialize(dialect, namespace: nil)
         @dialect = dialect
         @events = Namespace.wrap(namespace).events_table
       end
