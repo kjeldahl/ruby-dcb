@@ -14,14 +14,14 @@ module DcbEventStore
     # against the event_tags index table for containment.
     #
     # +namespace+ names the events and event_tags tables the statements
-    # touch (see Namespace).
+    # touch (see Namespace; nil is the default namespace).
     #
     # Pure: no connection, no I/O.
     class Dialect
       # Resolution the created_at column is stored in.
       MICROSECONDS_PER_SECOND = 1_000_000
 
-      def initialize(namespace: Namespace::DEFAULT)
+      def initialize(namespace: nil)
         namespace = Namespace.wrap(namespace)
         @events = namespace.events_table
         @event_tags = namespace.event_tags_table

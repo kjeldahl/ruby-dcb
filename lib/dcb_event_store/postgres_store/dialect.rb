@@ -12,11 +12,12 @@ module DcbEventStore
     # the parameters they need onto it and return the SQL fragment referring to
     # them, so a dialect is free to spend more (or fewer) parameters per clause.
     #
-    # +namespace+ names the events table the insert writes (see Namespace).
+    # +namespace+ names the events table the insert writes (see Namespace;
+    # nil is the default namespace).
     #
     # Pure: no connection, no I/O.
     class Dialect
-      def initialize(namespace: Namespace::DEFAULT)
+      def initialize(namespace: nil)
         @codec = ArrayCodec.new
         @events = Namespace.wrap(namespace).events_table
       end
