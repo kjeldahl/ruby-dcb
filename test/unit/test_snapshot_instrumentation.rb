@@ -32,6 +32,8 @@ class TestSnapshotInstrumentation < Minitest::Test
 
   def named(name) = @events.select { |e| e.name == name }
 
+  def snapshot_payload_values(key) = named("snapshot.dcb").map { |e| e.payload[key] }
+
   def build(**projections)
     DcbEventStore::DecisionModel.build(@store, snapshots: @snapshots, **projections)
   end
@@ -51,6 +53,29 @@ class TestSnapshotInstrumentation < Minitest::Test
     assert_equal 2, load.payload[:requested]
     assert_equal 2, load.payload[:loaded]
     assert_nil load.error
+  end
+
+  # namespace: names the snapshot store's namespace, nil in the default
+  # one and for a snapshot store that has no such notion.
+  def test_load_and_write_carry_the_snapshot_stores_namespace
+    @store.append([inc("t:a")])
+    build(a: counter("t:a"))
+    events = named("snapshot.dcb")
+
+    assert_equal %i[load write], snapshot_payload_values(:operation)
+    assert(events.all? { |e| e.payload.key?(:namespace) && e.payload[:namespace].nil? })
+
+    @events.clear
+    @snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new(namespace: "billing")
+    build(a: counter("t:a"))
+
+    assert_equal %w[billing billing], snapshot_payload_values(:namespace)
+
+    @events.clear
+    @snapshots = Class.new(DcbEventStore::Snapshots::InMemorySnapshotStore) { undef_method :namespace }.new
+    build(a: counter("t:a"))
+
+    assert_equal [nil, nil], snapshot_payload_values(:namespace)
   end
 
   def test_load_counts_only_the_snapshots_that_exist

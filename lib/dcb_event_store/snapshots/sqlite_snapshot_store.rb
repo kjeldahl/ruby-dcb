@@ -4,19 +4,23 @@ module DcbEventStore
   module Snapshots
     # The SQLite twin of PostgresSnapshotStore: same table (installed by
     # SqliteStore::Schema.create!), same forward-only upsert, state as JSON
-    # text.
+    # text, same +namespace:+ (see Namespace).
     class SqliteSnapshotStore
-      UPSERT_SQL = <<~SQL.freeze
-        INSERT INTO projection_snapshots (key, position, state)
-        VALUES (?, ?, ?)
-        ON CONFLICT (key) DO UPDATE
-          SET position = excluded.position, state = excluded.state,
-              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-          WHERE projection_snapshots.position < excluded.position
-      SQL
+      # The Namespace whose snapshot table this store reads and writes.
+      attr_reader :namespace
 
-      def initialize(db)
+      def initialize(db, namespace: nil)
         @db = db
+        @namespace = Namespace.wrap(namespace)
+        @table = @namespace.snapshots_table
+        @upsert_sql = <<~SQL
+          INSERT INTO #{@table} (key, position, state)
+          VALUES (?, ?, ?)
+          ON CONFLICT (key) DO UPDATE
+            SET position = excluded.position, state = excluded.state,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE #{@table}.position < excluded.position
+        SQL
       end
 
       def fetch(key)
@@ -28,7 +32,7 @@ module DcbEventStore
         return {} if keys.empty?
 
         rows = @db.execute(
-          "SELECT key, position, state FROM projection_snapshots WHERE key IN (SELECT value FROM json_each(?))",
+          "SELECT key, position, state FROM #{@table} WHERE key IN (SELECT value FROM json_each(?))",
           [JSON.generate(keys)]
         )
         rows.to_h do |row|
@@ -38,12 +42,12 @@ module DcbEventStore
       end
 
       def store(key, position:, state:)
-        @db.execute(UPSERT_SQL, [key, position, JSON.generate(state)])
+        @db.execute(@upsert_sql, [key, position, JSON.generate(state)])
         nil
       end
 
       def delete(key)
-        @db.execute("DELETE FROM projection_snapshots WHERE key = ?", [key])
+        @db.execute("DELETE FROM #{@table} WHERE key = ?", [key])
         nil
       end
 
@@ -55,10 +59,10 @@ module DcbEventStore
       def purge(name:, keep_version: nil)
         prefix = Snapshot.key_prefix(name, nil)
         if keep_version
-          @db.execute("DELETE FROM projection_snapshots WHERE substr(key, 1, length(?1)) = ?1 " \
+          @db.execute("DELETE FROM #{@table} WHERE substr(key, 1, length(?1)) = ?1 " \
                       "AND substr(key, 1, length(?2)) <> ?2", [prefix, Snapshot.key_prefix(name, keep_version)])
         else
-          @db.execute("DELETE FROM projection_snapshots WHERE substr(key, 1, length(?1)) = ?1", [prefix])
+          @db.execute("DELETE FROM #{@table} WHERE substr(key, 1, length(?1)) = ?1", [prefix])
         end
         @db.changes
       end
@@ -67,12 +71,12 @@ module DcbEventStore
       # must be set). Returns how many rows were removed.
       def purge_other_epochs
         prefix = Snapshot.epoch_prefix or raise ArgumentError, "no epoch is set"
-        @db.execute("DELETE FROM projection_snapshots WHERE substr(key, 1, length(?1)) <> ?1", [prefix])
+        @db.execute("DELETE FROM #{@table} WHERE substr(key, 1, length(?1)) <> ?1", [prefix])
         @db.changes
       end
 
       def clear
-        @db.execute("DELETE FROM projection_snapshots")
+        @db.execute("DELETE FROM #{@table}")
         nil
       end
     end

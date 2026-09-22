@@ -18,6 +18,18 @@ class TestInMemorySnapshotStore < Minitest::Test
     assert_equal 0, @snapshots.size
   end
 
+  # namespace: is kept and validated like the SQL snapshot stores do, and
+  # changes nothing else: every instance is its own map.
+  def test_namespace_is_kept_and_validated
+    assert_predicate @snapshots.namespace, :default?
+    billing = DcbEventStore::Snapshots::InMemorySnapshotStore.new(namespace: "billing")
+
+    assert_equal "billing", billing.namespace.name
+    billing.store("k", position: 1, state: 1)
+    assert_nil @snapshots.fetch("k")
+    assert_raises(ArgumentError) { DcbEventStore::Snapshots::InMemorySnapshotStore.new(namespace: "Bad Name") }
+  end
+
   def test_size_counts_distinct_keys
     @snapshots.store("a", position: 1, state: 1)
     @snapshots.store("a", position: 2, state: 2)

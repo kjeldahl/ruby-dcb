@@ -126,6 +126,19 @@ class TestSqliteDialect < Minitest::Test
     assert_equal "INSERT INTO event_tags (tag, sequence_position) VALUES (?, ?)", @dialect.insert_tag_sql
   end
 
+  # --- namespace ---
+
+  def test_namespaced_dialect_writes_and_reads_the_namespaced_tables
+    dialect = DcbEventStore::SqliteStore::Dialect.new(namespace: "billing")
+
+    assert_equal @dialect.insert_sql.sub("INTO events", "INTO billing_events"), dialect.insert_sql
+    assert_equal "INSERT INTO billing_event_tags (tag, sequence_position) VALUES (?, ?)", dialect.insert_tag_sql
+
+    params = []
+    assert_includes dialect.tags_contain(params, ["t1"]), "FROM billing_event_tags WHERE"
+    assert_equal ['["t1"]', 1], params
+  end
+
   def test_insert_params_are_in_column_order
     assert_equal ["id-1", "A", '{"n":1}', '["t1"]', "c-1", "r-1", 1], @dialect.insert_params(event)
   end

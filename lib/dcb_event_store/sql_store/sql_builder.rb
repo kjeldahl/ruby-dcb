@@ -11,16 +11,20 @@ module DcbEventStore
     #
     # Each builder returns a [sql, params] pair (or a values clause / params
     # pair) ready to hand to the driver.
+    #
+    # +namespace+ names the events table the statements read (see
+    # Namespace); nil, the default, is the plain "events".
     class SqlBuilder
-      def initialize(dialect)
+      def initialize(dialect, namespace: nil)
         @dialect = dialect
+        @events = Namespace.wrap(namespace).events_table
       end
 
       # SELECT for reading the event stream matching +query+, optionally only
       # events after +after+, ordered by ascending sequence position.
       def read_sql(query, after:)
         where, params = where_clause(query, after)
-        sql = "SELECT * FROM events"
+        sql = "SELECT * FROM #{@events}"
         sql += " WHERE #{where}" if where
         sql += " ORDER BY sequence_position ASC"
         [sql, params]
@@ -30,7 +34,7 @@ module DcbEventStore
       # events match +query+ after +after+.
       def condition_sql(query, after)
         where, params = where_clause(query, after)
-        sql = where ? "SELECT COUNT(*) FROM events WHERE #{where}" : "SELECT COUNT(*) FROM events"
+        sql = where ? "SELECT COUNT(*) FROM #{@events} WHERE #{where}" : "SELECT COUNT(*) FROM #{@events}"
         [sql, params]
       end
 

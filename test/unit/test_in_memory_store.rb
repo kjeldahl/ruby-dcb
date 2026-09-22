@@ -36,6 +36,14 @@ class TestInMemoryStore < Minitest::Test
     assert_empty store.read(DcbEventStore::Query.all).to_a
   end
 
+  # namespace: is accepted for parity with the SQL stores and validated the
+  # same way, but every instance is its own log regardless.
+  def test_namespace_is_kept_and_validated
+    assert_predicate DcbEventStore::InMemoryStore.new.namespace, :default?
+    assert_equal "billing", DcbEventStore::InMemoryStore.new(namespace: "billing").namespace.name
+    assert_raises(ArgumentError) { DcbEventStore::InMemoryStore.new(namespace: "Bad Name") }
+  end
+
   def test_query_item_with_no_types_and_no_tags_matches_nothing
     @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
 

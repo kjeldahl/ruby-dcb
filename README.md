@@ -42,6 +42,23 @@ DcbEventStore::SqliteStore::Schema.create!(db)
 
 Both are idempotent (`CREATE TABLE IF NOT EXISTS`), so they can run at boot. `Schema.configure!(db)` alone applies the pragmas to a further SQLite connection on an existing database.
 
+### Namespaces: several event logs in one database
+
+Several bounded contexts can share one database without sharing a log: a **namespace** gives a store its own tables, its own sequence positions, its own snapshots and, on PostgreSQL, its own `NOTIFY` channel and advisory-lock key space. Stores in different namespaces neither see nor wait for each other; a condition in one is evaluated against that namespace alone.
+
+```ruby
+DcbEventStore::PostgresStore::Schema.create!(conn, namespace: "billing")    # billing_events, billing_projection_snapshots
+DcbEventStore::PostgresStore::Schema.create!(conn, namespace: "shipping")
+
+billing  = DcbEventStore::PostgresStore.new(billing_conn,  namespace: "billing")
+shipping = DcbEventStore::PostgresStore.new(shipping_conn, namespace: "shipping")
+billing_snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn, namespace: "billing")
+```
+
+The same `namespace:` goes to `SqliteStore`, `SqliteStore::Schema.create!`/`drop!`, `SqliteSnapshotStore` and, for parity, `InMemoryStore` and `InMemorySnapshotStore` (where every instance is its own log anyway). Instrumentation payloads carry it as `namespace:`. Without one, a store uses the default namespace: the unprefixed `events`, `event_tags` and `projection_snapshots` tables, exactly as before, so existing deployments need no migration. A name is lowercase letters, digits and underscores (it is spliced into identifiers, so it is validated rather than bound), at most 37 characters, and prefixes every object: `billing_events`, `billing_event_tags`, `billing_projection_snapshots`, channel `billing_events_appended`. `Schema.drop!(conn, namespace: "billing")` removes that namespace's tables and nothing else. `store.namespace` returns the `DcbEventStore::Namespace` in use (`#name`, `#events_table`, ...).
+
+Each store still owns its connection (next section), so two namespaces mean two connections when both append or subscribe concurrently. Events cannot be appended atomically across namespaces, and a read never spans them: that is the point of a bounded context. For an ordered read across contexts, keep them in one namespace and separate them by tags instead.
+
 ### The store owns its connection
 
 **A connection handed to a store belongs to that store**, and must not also carry application queries. The store configures it and holds state on it:
@@ -186,7 +203,7 @@ result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
 )
 ```
 
-- The `projection_snapshots` table is part of the schema `Schema.create!` installs on both backends; nothing extra to set up.
+- The `projection_snapshots` table is part of the schema `Schema.create!` installs on both backends; nothing extra to set up. A namespaced store's snapshots go in that namespace's table: build the snapshot store with the same `namespace:` as the store (`PostgresSnapshotStore.new(conn, namespace: "billing")`).
 - The snapshot **key** is `name`, `version` and the projection's query (`Query#fingerprint`, a JSON rendering of its items that carries the entity's tags — replaced by its SHA-256 when longer than the digest itself, so keys stay under 64 characters plus the prefix), so one `Snapshot` configuration serves every instance of a projection and each entity gets its own snapshot.
 - **Invalidation is explicit.** Nothing can detect that a handler or `initial_state` changed, so `version:` is required (no default): bump it whenever the fold would compute differently, and the old snapshots are never read again. A query change needs no bump (the key already differs). For a change that touches every projection at once, set `DcbEventStore::Snapshots.epoch = "<release>"` at boot: it prefixes every key, so one knob invalidates everything.
 - **Cleanup:** stale rows are never read but stay in the table until purged: `snapshots.purge(name: "course_subscriptions", keep_version: 2)` drops the other versions of a projection (`keep_version:` omitted drops them all), and `snapshots.purge_other_epochs` drops everything not under the current epoch. Both return the number of rows removed.
@@ -264,12 +281,14 @@ Emitted events and payloads:
 
 | Event | Emitted by | Payload |
 |-------|------------|---------|
-| `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
-| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `query:`, `after:`, `event_count:` |
+| `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `namespace:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
+| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `namespace:`, `query:`, `after:`, `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
 | `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
-| `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
-| `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
+| `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `namespace:`, `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
+| `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `namespace:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `namespace:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
+
+`namespace:` is the emitting store's namespace name (see [Namespaces](#namespaces-several-event-logs-in-one-database)), `nil` in the default namespace: the log subscribers drop `nil` values, so single-namespace logs read as before, and `AppsignalSubscriber` adds a `namespace` tag only when one is named.
 
 A failed append condition publishes the `append.dcb` event with `event.error` set to the `ConditionNotMet` exception before it propagates — useful for tracking consistency-boundary conflict rates.
 
@@ -493,6 +512,7 @@ Nested constants resolve through the alias too (`Store::LockKeys`), so nothing b
 - **One template, two backends** — `SqlStore` holds read/append/subscribe; each backend supplies a handful of hooks and a `Dialect`
 - **Serialized condition checks** — advisory locks per tag on PostgreSQL (every append locks the tags its events carry plus the tags its condition names, so a writer on a tag always waits for a condition on it and vice versa; a condition naming no tag takes a global lock), `BEGIN IMMEDIATE` on SQLite
 - **Indexed tags** — GIN index on the `tags` column on PostgreSQL, an `event_tags` index table on SQLite
+- **Namespaces** — one `Namespace` value names the tables, channel and lock-key offset a store uses; several bounded contexts keep separate logs in one database
 - **Append-only** — database triggers prevent UPDATE/DELETE
 - **Idempotent writes** — `ON CONFLICT (event_id) DO NOTHING`
 - **`Data.define`** for immutable value objects (Event, SequencedEvent, Query, etc.)

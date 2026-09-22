@@ -33,6 +33,7 @@ requires:
   - ./test/unit/test_sql_store
   - ./test/unit/test_sqlite_dialect
   - ./test/unit/test_lock_keys
+  - ./test/unit/test_namespace
   - ./test/unit/test_snapshot
   - ./test/unit/test_in_memory_snapshot_store
   - ./test/unit/test_query_key_collisions
@@ -56,6 +57,7 @@ matcher:
     - DcbEventStore::Query*
     - DcbEventStore::QueryItem*
     - DcbEventStore::AppendCondition*
+    - DcbEventStore::Namespace*
     - DcbEventStore::Projection*
     - DcbEventStore::DecisionModel*
     - DcbEventStore::Upcaster*

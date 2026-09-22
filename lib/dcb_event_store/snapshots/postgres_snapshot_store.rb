@@ -10,17 +10,25 @@ module DcbEventStore
     # State travels as JSON (JSONB column). The upsert only moves a snapshot
     # forward: a concurrent builder that folded to a lower position leaves
     # the newer row alone.
+    #
+    # +namespace:+ picks the snapshot table of that namespace's event log
+    # (see Namespace); give it the namespace of the store the snapshots are
+    # taken from.
     class PostgresSnapshotStore
-      UPSERT_SQL = <<~SQL.freeze
-        INSERT INTO projection_snapshots (key, position, state, updated_at)
-        VALUES ($1, $2, $3::jsonb, now())
-        ON CONFLICT (key) DO UPDATE
-          SET position = EXCLUDED.position, state = EXCLUDED.state, updated_at = now()
-          WHERE projection_snapshots.position < EXCLUDED.position
-      SQL
+      # The Namespace whose snapshot table this store reads and writes.
+      attr_reader :namespace
 
-      def initialize(conn)
+      def initialize(conn, namespace: nil)
         @conn = conn
+        @namespace = Namespace.wrap(namespace)
+        @table = @namespace.snapshots_table
+        @upsert_sql = <<~SQL
+          INSERT INTO #{@table} (key, position, state, updated_at)
+          VALUES ($1, $2, $3::jsonb, now())
+          ON CONFLICT (key) DO UPDATE
+            SET position = EXCLUDED.position, state = EXCLUDED.state, updated_at = now()
+            WHERE #{@table}.position < EXCLUDED.position
+        SQL
       end
 
       def fetch(key)
@@ -32,7 +40,7 @@ module DcbEventStore
         return {} if keys.empty?
 
         result = @conn.exec_params(
-          "SELECT key, position, state FROM projection_snapshots WHERE key = ANY($1::text[])",
+          "SELECT key, position, state FROM #{@table} WHERE key = ANY($1::text[])",
           [PostgresStore::ArrayCodec.new.encode(keys)]
         )
         result.to_h { |row| [row["key"], entry(row)] }
@@ -45,12 +53,12 @@ module DcbEventStore
       private :entry
 
       def store(key, position:, state:)
-        @conn.exec_params(UPSERT_SQL, [key, position, JSON.generate(state)])
+        @conn.exec_params(@upsert_sql, [key, position, JSON.generate(state)])
         nil
       end
 
       def delete(key)
-        @conn.exec_params("DELETE FROM projection_snapshots WHERE key = $1", [key])
+        @conn.exec_params("DELETE FROM #{@table} WHERE key = $1", [key])
         nil
       end
 
@@ -62,12 +70,12 @@ module DcbEventStore
         prefix = Snapshot.key_prefix(name, nil)
         if keep_version
           @conn.exec_params(
-            "DELETE FROM projection_snapshots WHERE substr(key, 1, length($1)) = $1 " \
+            "DELETE FROM #{@table} WHERE substr(key, 1, length($1)) = $1 " \
             "AND substr(key, 1, length($2)) <> $2",
             [prefix, Snapshot.key_prefix(name, keep_version)]
           ).cmd_tuples
         else
-          @conn.exec_params("DELETE FROM projection_snapshots WHERE substr(key, 1, length($1)) = $1", [prefix])
+          @conn.exec_params("DELETE FROM #{@table} WHERE substr(key, 1, length($1)) = $1", [prefix])
                .cmd_tuples
         end
       end
@@ -76,12 +84,12 @@ module DcbEventStore
       # must be set). Returns how many rows were removed.
       def purge_other_epochs
         prefix = Snapshot.epoch_prefix or raise ArgumentError, "no epoch is set"
-        @conn.exec_params("DELETE FROM projection_snapshots WHERE substr(key, 1, length($1)) <> $1", [prefix])
+        @conn.exec_params("DELETE FROM #{@table} WHERE substr(key, 1, length($1)) <> $1", [prefix])
              .cmd_tuples
       end
 
       def clear
-        @conn.exec("DELETE FROM projection_snapshots")
+        @conn.exec("DELETE FROM #{@table}")
         nil
       end
     end
