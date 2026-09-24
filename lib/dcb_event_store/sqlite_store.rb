@@ -58,7 +58,18 @@ module DcbEventStore
     end
 
     def insert_event(event)
-      row = @db.get_first_row(@dialect.insert_sql, @dialect.insert_params(event))
+      insert_with_tags(event, @dialect.insert_sql, @dialect.insert_params(event))
+    end
+
+    # Nothing to take, as for an append: BEGIN IMMEDIATE already did.
+    def lock_for_import!; end
+
+    def import_event(event)
+      insert_with_tags(event, @dialect.import_sql, @dialect.import_params(event))
+    end
+
+    def insert_with_tags(event, sql, params)
+      row = @db.get_first_row(sql, params)
       return nil if row.nil?
 
       insert_tags(event, row["sequence_position"])

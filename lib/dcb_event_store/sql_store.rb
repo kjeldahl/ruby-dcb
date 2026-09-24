@@ -56,6 +56,36 @@ module DcbEventStore
       end
     end
 
+    # Writes +events+ as they were exported from a store: SequencedEvents (a
+    # read from another store, or EventFile's decoded lines), keeping their
+    # id, created_at and schema_version. sequence_position is not kept: the
+    # events get fresh positions in the order given, so an import into a
+    # store that already holds events appends after them. A nil created_at
+    # takes the database's clock, a nil schema_version 1.
+    #
+    # One write transaction for the lot. Ids already stored are skipped, so
+    # re-importing the same events is a no-op. No AppendCondition: an import
+    # trusts its input, and takes the write lock every append waits on, so
+    # none can interleave with it. Returns the SequencedEvents written.
+    def import(events)
+      events = Array(events)
+      return [] if events.empty?
+
+      with_write_transaction do
+        lock_for_import!
+
+        imported = events.filter_map do |event|
+          row = import_event(event)
+          row && @row_mapper.to_imported_event(event, row)
+        end
+
+        notify_position = imported.last&.sequence_position
+        notify_appended(notify_position) if notify_position
+
+        imported
+      end
+    end
+
     def subscribe(query, after: nil, &block)
       catch_up = after ? read_from(query, after: after) : read(query)
       last_pos = instrument_subscribe(catch_up, query, :catch_up, &block) || after
@@ -139,6 +169,18 @@ module DcbEventStore
     # created_at) or nil when an event with the same id already exists.
     def insert_event(event)
       raise NotImplementedError, "#{self.class} must implement #insert_event"
+    end
+
+    # Takes the lock that keeps every append out while an import runs. May
+    # be a no-op when the write transaction already serializes globally.
+    def lock_for_import!
+      raise NotImplementedError, "#{self.class} must implement #lock_for_import!"
+    end
+
+    # Inserts one exported event with its created_at and schema_version,
+    # returning its row like #insert_event, or nil when its id is stored.
+    def import_event(event)
+      raise NotImplementedError, "#{self.class} must implement #import_event"
     end
 
     # One page of matching rows as string-keyed hashes, ordered by ascending

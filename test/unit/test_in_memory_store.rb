@@ -5,6 +5,7 @@ require_relative "../support/client_contract"
 require_relative "../support/decision_model_contract"
 require_relative "../support/upcaster_contract"
 require_relative "../support/snapshot_decision_model_contract"
+require_relative "../support/import_export_contract"
 
 # Runs the shared backend contracts against InMemoryStore, proving it behaves
 # like PostgresStore (which runs the same contracts in
@@ -18,6 +19,7 @@ class TestInMemoryStore < Minitest::Test
   include DecisionModelContract
   include UpcasterContract
   include SnapshotDecisionModelContract
+  include ImportExportContract
 
   def setup
     @store = build_store

@@ -54,6 +54,13 @@ module DcbEventStore
           schema_version: 1
         )
       end
+
+      # Builds a SequencedEvent for an imported +event+ (a SequencedEvent from
+      # an export): its payload and schema version as given, the position
+      # and timestamp from the RETURNING +row+.
+      def to_imported_event(event, row)
+        to_appended_event(event, row).with(schema_version: event.schema_version || 1)
+      end
     end
   end
 end

@@ -36,6 +36,7 @@ requires:
   - ./test/unit/test_snapshot
   - ./test/unit/test_in_memory_snapshot_store
   - ./test/unit/test_query_key_collisions
+  - ./test/unit/test_event_file
   - ./test/integration/test_append_only
   - ./test/integration/test_subscribe
   - ./test/integration/test_client
@@ -60,6 +61,7 @@ matcher:
     - DcbEventStore::DecisionModel*
     - DcbEventStore::Upcaster*
     - DcbEventStore::Client*
+    - DcbEventStore::EventFile*
     - DcbEventStore::InMemoryStore*
     - DcbEventStore::Notifications*
     - DcbEventStore::ActiveSupportInstrumentation*
