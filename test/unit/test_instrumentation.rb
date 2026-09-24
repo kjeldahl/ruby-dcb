@@ -291,6 +291,26 @@ class TestSubscribeInstrumentation < InstrumentationTestCase
     assert_empty subscribe_events
   end
 
+  def test_import_delivers_to_subscribers_once_and_not_for_known_ids
+    store = DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :batch)
+    delivered = []
+    store.subscribe(DcbEventStore::Query.all) { |event| delivered << event.type }
+    event = DcbEventStore::SequencedEvent.new(
+      sequence_position: nil, type: "A", data: {}, tags: [], created_at: nil,
+      id: SecureRandom.uuid, causation_id: nil, correlation_id: nil, schema_version: nil
+    )
+    @events.clear
+
+    store.import([event])
+    assert_equal ["A"], delivered
+    assert_equal 1, subscribe_events.size
+
+    @events.clear
+    store.import([event])
+    assert_equal ["A"], delivered
+    assert_empty subscribe_events
+  end
+
   def test_instrumentation_is_decided_per_delivery_round
     store = DcbEventStore::InMemoryStore.new
 

@@ -1,4 +1,5 @@
 require "json"
+require "time"
 require_relative "../sql_store/timestamp"
 
 module DcbEventStore
@@ -90,6 +91,29 @@ module DcbEventStore
       def insert_params(event)
         [event.id, event.type, JSON.generate(event.data), encode_list(event.tags),
          event.causation_id, event.correlation_id, 1]
+      end
+
+      # Single-row insert of one imported event: #insert_sql plus the
+      # schema_version and created_at the export carried (the column's own
+      # default when nil). Takes #import_params.
+      def import_sql
+        <<~SQL
+          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER)))
+          ON CONFLICT(event_id) DO NOTHING
+          RETURNING sequence_position, created_at
+        SQL
+      end
+
+      def import_params(event)
+        [*insert_params(event).take(6), event.schema_version || 1, encode_timestamp(event.created_at)]
+      end
+
+      # Epoch microseconds, the shape the created_at column stores and
+      # #decode_timestamp reads back, floored like Time#usec (so before 1970
+      # too) and like PostgreSQL's microsecond timestamps.
+      def encode_timestamp(time)
+        time && (time.to_r * MICROSECONDS_PER_SECOND).floor
       end
 
       # Tag/type lists travel as JSON arrays of strings: the format the tags

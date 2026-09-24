@@ -407,6 +407,39 @@ Because metrics are recorded after each operation completes, the adapter works a
 
 `DcbEventStore.instrumentation` is replaceable (e.g. with a fresh instance per test). Subscriber management is thread-safe; publication runs synchronously on the instrumented thread, so keep subscribers fast and non-raising.
 
+### Import / export (seeding)
+
+Events move in and out as [JSON Lines](https://jsonlines.org), one event per line — to seed a database, back one up, or copy events between backends:
+
+```jsonl
+{"id":"0b4f…","type":"CourseDefined","tags":["course:c1"],"data":{"capacity":10},"created_at":"2026-01-05T09:00:00.000000Z"}
+{"type":"StudentRegistered","tags":["student:s1"],"data":{"name":"Ada"}}
+```
+
+Only `type` is required. Missing fields default: `data` `{}`, `tags` `[]`, `schema_version` 1, `created_at` the import time, `id` a fresh UUID. An export writes every field (plus `sequence_position`, informational only). Unknown keys are an error. Give seed lines an `id` if the file may be imported twice: stored ids are skipped, so a re-import is then a no-op. PostgreSQL needs ids that are UUIDs.
+
+```ruby
+DcbEventStore::EventFile.export(store, "events.jsonl")                   # or any IO
+DcbEventStore::EventFile.export(store, $stdout, query: query, after: 100)
+result = DcbEventStore::EventFile.import(store, "seeds.jsonl")          # batch_size: 1000 (nil = one transaction)
+result.imported # => 2   (also result.read, result.skipped)
+
+store.import(other_store.read(DcbEventStore::Query.all).to_a)           # store to store, no file
+```
+
+Imports keep each event's `id`, `created_at` and `schema_version` and get fresh sequence positions in file order, after whatever the store already holds. They check no append condition: the file is trusted. On PostgreSQL an import batch takes the global append lock exclusively, so no append interleaves with it. Each batch is its own transaction; a failed import can be re-run and resumes where it stopped. Exports read through the store, so a store with an upcaster exports upcast payloads (with the upcast `schema_version`).
+
+From the shell, `dcb_events` (`bin/dcb_events` in a checkout) does the same:
+
+```bash
+dcb_events export -b sqlite -d events.sqlite3 > events.jsonl
+dcb_events export -b postgres -d my_event_store --type CourseDefined --tag course:c1 --after 100 out.jsonl
+dcb_events import -b postgres -d postgres://localhost/my_event_store --create-schema seeds.jsonl
+dcb_events --help
+```
+
+`-b`/`-d` default to `$DCB_BACKEND`/`$DATABASE_URL`. `--create-schema` installs the schema first; `--batch-size N` sets events per transaction (0: whole file in one).
+
 ### In-memory store for fast tests
 
 `InMemoryStore` is a drop-in replacement for either SQL store that needs no database at all, making application test suites (and especially mutation testing) much faster:

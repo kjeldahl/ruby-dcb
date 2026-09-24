@@ -98,4 +98,29 @@ class TestRowMapper < Minitest::Test
     assert_equal 7, appended.sequence_position
     assert_same time, appended.created_at
   end
+
+  # --- to_imported_event ---
+
+  def imported(schema_version:)
+    DcbEventStore::SequencedEvent.new(
+      sequence_position: 99, type: "A", data: { n: 1 }, tags: ["t1"], id: "id-1",
+      causation_id: "c-1", correlation_id: "r-1", schema_version: schema_version,
+      created_at: Time.utc(2020, 1, 1)
+    )
+  end
+
+  def test_to_imported_event_keeps_schema_version_and_takes_position_and_time_from_row
+    result = mapper.to_imported_event(imported(schema_version: 3), row)
+
+    assert_equal 42, result.sequence_position
+    assert_equal Time.parse("2026-06-13 22:00:00+00"), result.created_at
+    assert_equal 3, result.schema_version
+    assert_equal({ n: 1 }, result.data)
+    assert_equal ["t1"], result.tags
+    assert_equal %w[A id-1 c-1 r-1], [result.type, result.id, result.causation_id, result.correlation_id]
+  end
+
+  def test_to_imported_event_defaults_schema_version_to_one
+    assert_equal 1, mapper.to_imported_event(imported(schema_version: nil), row).schema_version
+  end
 end

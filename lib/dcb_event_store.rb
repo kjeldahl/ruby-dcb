@@ -16,6 +16,7 @@ require_relative "dcb_event_store/projection"
 require_relative "dcb_event_store/decision_model"
 require_relative "dcb_event_store/upcaster"
 require_relative "dcb_event_store/client"
+require_relative "dcb_event_store/event_file"
 
 module DcbEventStore
   # The SQL backends load on first reference rather than with the gem, so an

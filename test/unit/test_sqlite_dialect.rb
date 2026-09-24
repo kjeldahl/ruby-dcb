@@ -135,6 +135,57 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ["id-2", "B", "{}", "[]", nil, nil, 1], @dialect.insert_params(bare)
   end
 
+  # --- import_sql / import_params ---
+
+  def imported(**attrs)
+    DcbEventStore::SequencedEvent.new(
+      sequence_position: nil, type: "A", data: { n: 1 }, tags: ["t1"], id: "id-1",
+      causation_id: "c-1", correlation_id: "r-1", schema_version: 3,
+      created_at: Time.utc(2026, 6, 13, 22, 0, 0, 123_456), **attrs
+    )
+  end
+
+  def test_import_sql
+    expected = <<~SQL
+      INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER)))
+      ON CONFLICT(event_id) DO NOTHING
+      RETURNING sequence_position, created_at
+    SQL
+    assert_equal expected, @dialect.import_sql
+  end
+
+  def test_import_params_carry_schema_version_and_created_at
+    micros = (Time.utc(2026, 6, 13, 22, 0, 0).to_i * 1_000_000) + 123_456
+    assert_equal ["id-1", "A", '{"n":1}', '["t1"]', "c-1", "r-1", 3, micros], @dialect.import_params(imported)
+  end
+
+  def test_import_params_default_schema_version_and_leave_created_at_to_the_database
+    params = @dialect.import_params(imported(schema_version: nil, created_at: nil))
+    assert_equal [1, nil], params.last(2)
+  end
+
+  def test_encode_timestamp_round_trips_through_decode_timestamp
+    [Time.utc(2026, 6, 13, 22, 0, 0, 123_456), Time.utc(1969, 12, 31, 23, 59, 59, 500_000),
+     Time.at(0).utc].each do |time|
+      assert_equal time, @dialect.decode_timestamp(@dialect.encode_timestamp(time))
+    end
+  end
+
+  # Floored to the microsecond on both sides of the epoch, like Time#usec.
+  def test_encode_timestamp_floors_nanoseconds
+    assert_equal 123_456, @dialect.encode_timestamp(Time.at(0, 123_456_700, :nsec))
+    assert_equal(-500_000, @dialect.encode_timestamp(Time.at(-1, 500_000_300, :nsec)))
+  end
+
+  def test_encode_timestamp_of_nil
+    assert_nil @dialect.encode_timestamp(nil)
+  end
+
+  def test_encode_timestamp_of_a_time_before_the_epoch
+    assert_equal(-500_000, @dialect.encode_timestamp(Time.utc(1969, 12, 31, 23, 59, 59, 500_000)))
+  end
+
   # --- encode_list / decode_list ---
 
   def test_encode_list_writes_a_json_array_of_strings
