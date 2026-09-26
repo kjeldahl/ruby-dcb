@@ -127,14 +127,15 @@ class TestEventFile < Minitest::Test
     io = StringIO.new
 
     assert_equal 2, EventFile.export(store, io)
-    assert_equal([1, 2], io.string.lines.map { |l| JSON.parse(l)["sequence_position"] })
+    assert_equal([1, 2], io.string.lines.drop(1).map { |l| JSON.parse(l)["sequence_position"] })
     assert io.string.end_with?("\n")
   end
 
   def test_export_of_an_empty_store
     io = StringIO.new
     assert_equal 0, EventFile.export(DcbEventStore::InMemoryStore.new, io)
-    assert_equal "", io.string
+    assert_equal 1, io.string.lines.size
+    assert_equal EventFile::FORMAT, JSON.parse(io.string)["format"]
   end
 
   def test_export_filters_by_query_and_position
@@ -146,7 +147,7 @@ class TestEventFile < Minitest::Test
      [{ query: query, after: 1 }, [3]], [{ after: 0 }, [1, 2, 3, 4]]].each do |options, positions|
       io = StringIO.new
       EventFile.export(store, io, **options)
-      assert_equal positions, io.string.lines.map { |l| JSON.parse(l)["sequence_position"] }, options.inspect
+      assert_equal positions, io.string.lines.drop(1).map { |l| JSON.parse(l)["sequence_position"] }, options.inspect
     end
   end
 
@@ -180,6 +181,109 @@ class TestEventFile < Minitest::Test
         assert_equal ["A"], EventFile.each_event("|touch pwned").map(&:type)
       end
     end
+  end
+
+  # --- header ---
+
+  def test_encode_header_writes_every_field_in_order
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: %w[A B], tags: ["t:1"]),
+                                      DcbEventStore::QueryItem.new(event_types: [], tags: ["t:2"])])
+    line = EventFile::Header.encode(
+      store: DcbEventStore::InMemoryStore.new, query: query, after: 7, description: "staging seed",
+      exported_at: Time.new(2026, 9, 26, 10, 0, Rational(1, 1_000_000), "+02:00")
+    )
+
+    expected = '{"format":"dcb_event_store/events","version":1,"exported_at":"2026-09-26T08:00:00.000001Z",' \
+               "\"gem_version\":\"#{DcbEventStore::VERSION}\",\"store\":\"DcbEventStore::InMemoryStore\"," \
+               '"query":[{"types":["A","B"],"tags":["t:1"]},{"types":[],"tags":["t:2"]}],' \
+               '"after":7,"description":"staging seed"}'
+    assert_equal expected, line
+  end
+
+  def test_encode_header_defaults_exported_at_to_now
+    before = Time.now - 1
+    line = EventFile::Header.encode(store: Object.new, query: DcbEventStore::Query.all, after: nil, description: nil)
+    record = JSON.parse(line)
+
+    assert_operator Time.iso8601(record["exported_at"]), :>=, before
+    assert_equal [[], nil, nil, "Object"], record.values_at("query", "after", "description", "store")
+  end
+
+  def test_export_writes_the_header_first_and_it_round_trips
+    store = DcbEventStore::InMemoryStore.new
+    store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["t:1"])])
+    io = StringIO.new
+    before = Time.now - 1
+
+    EventFile.export(store, io, query: query, after: 0, description: "demo")
+    header = EventFile.header(StringIO.new(io.string))
+
+    assert_equal EventFile::FORMAT, header.format
+    assert_equal 1, header.version
+    assert_operator header.exported_at, :>=, before
+    assert_equal DcbEventStore::VERSION, header.gem_version
+    assert_equal "DcbEventStore::InMemoryStore", header.store
+    assert_equal query, header.query
+    assert_equal 0, header.after
+    assert_equal "demo", header.description
+  end
+
+  def test_header_of_a_file_without_one_or_an_empty_file
+    assert_nil EventFile.header(StringIO.new(%({"type":"A"}\n)))
+    assert_nil EventFile.header(StringIO.new(""))
+  end
+
+  def test_header_skips_leading_blank_lines_and_tolerates_missing_and_unknown_fields
+    header = EventFile.header(StringIO.new(%(\n{"format":"dcb_event_store/events","version":1,"future":true}\n)))
+
+    assert_equal [EventFile::FORMAT, 1], [header.format, header.version]
+    assert_nil header.exported_at
+    assert_nil header.store
+    assert_equal DcbEventStore::Query.all, header.query
+  end
+
+  def test_header_query_items_may_omit_types_or_tags
+    line = '{"format":"dcb_event_store/events","version":1,"query":[{"types":["A"]},{"tags":["t"]}]}'
+    items = EventFile.header(StringIO.new(line)).query.items
+
+    assert_equal([[["A"], []], [[], ["t"]]], items.map { |i| [i.event_types, i.tags] })
+  end
+
+  def test_rejects_bad_headers
+    {
+      '{"format":"other","version":1}' => %(line 1: unknown format "other"),
+      '{"format":"dcb_event_store/events","version":2}' =>
+        "line 1: unsupported format version 2 (this gem reads up to 1)",
+      '{"format":"dcb_event_store/events","version":0}' =>
+        "line 1: unsupported format version 0 (this gem reads up to 1)",
+      '{"format":"dcb_event_store/events","version":"1"}' =>
+        %(line 1: unsupported format version "1" (this gem reads up to 1)),
+      '{"format":"dcb_event_store/events"}' => "line 1: unsupported format version nil (this gem reads up to 1)"
+    }.each do |line, message|
+      error = assert_raises(ArgumentError, line) { EventFile.each_event(StringIO.new(line)).to_a }
+      assert_equal message, error.message
+    end
+  end
+
+  def test_a_header_after_the_first_line_is_an_error
+    io = StringIO.new(%({"type":"A"}\n{"format":"dcb_event_store/events","version":1}\n))
+    error = assert_raises(ArgumentError) { EventFile.each_event(io).to_a }
+
+    assert_equal "line 2: a header is only allowed on the first line", error.message
+  end
+
+  def test_each_event_skips_the_header
+    io = StringIO.new(%({"format":"dcb_event_store/events","version":1}\n{"type":"A"}\n))
+    assert_equal ["A"], EventFile.each_event(io).map(&:type)
+  end
+
+  def test_import_reports_the_header
+    io = StringIO.new(%({"format":"dcb_event_store/events","version":1,"description":"d"}\n{"type":"A"}\n))
+    result = EventFile.import(RecordingStore.new, io)
+
+    assert_equal [1, 1, "d"], [result.read, result.imported, result.header.description]
+    assert_nil EventFile.import(RecordingStore.new, lines(1)).header
   end
 
   # --- import ---

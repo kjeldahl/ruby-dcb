@@ -151,6 +151,6 @@ module ImportExportContract
     )
 
     assert_equal 1, count
-    assert_equal(["A"], io.string.lines.map { |line| JSON.parse(line)["type"] })
+    assert_equal(["A"], io.string.lines.drop(1).map { |line| JSON.parse(line)["type"] })
   end
 end

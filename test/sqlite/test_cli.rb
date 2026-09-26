@@ -37,7 +37,7 @@ class TestCli < Minitest::Test
   end
 
   def types(jsonl)
-    jsonl.lines.map { |line| JSON.parse(line)["type"] }
+    jsonl.lines.drop(1).map { |line| JSON.parse(line)["type"] }
   end
 
   def target_events
@@ -63,8 +63,8 @@ class TestCli < Minitest::Test
     _, after, = cli("export", "-b", "sqlite", "-d", @db_path, "--after", "1", "--type", "CourseDefined")
 
     assert_equal ["StudentRegistered"], types(by_type)
-    assert_equal([["course:c2"]], by_tag.lines.map { |l| JSON.parse(l)["tags"] })
-    assert_equal([3], after.lines.map { |l| JSON.parse(l)["sequence_position"] })
+    assert_equal([["course:c2"]], by_tag.lines.drop(1).map { |l| JSON.parse(l)["tags"] })
+    assert_equal([3], after.lines.drop(1).map { |l| JSON.parse(l)["sequence_position"] })
   end
 
   def test_export_to_a_file
@@ -73,7 +73,17 @@ class TestCli < Minitest::Test
 
     assert_equal 0, status
     assert_equal "", out
-    assert_equal 3, File.readlines(path).size
+    assert_equal 4, File.readlines(path).size
+  end
+
+  def test_export_writes_a_header_with_the_filter_and_description
+    _, out, = cli("export", "-b", "sqlite", "-d", @db_path, "--type", "CourseDefined", "--tag", "course:c1",
+                  "--after", "0", "--description", "demo seed")
+    header = JSON.parse(out.lines.first)
+
+    assert_equal ["dcb_event_store/events", 1, "DcbEventStore::SqliteStore", 0, "demo seed"],
+                 header.values_at("format", "version", "store", "after", "description")
+    assert_equal [{ "types" => ["CourseDefined"], "tags" => ["course:c1"] }], header["query"]
   end
 
   def test_export_refuses_a_missing_sqlite_file
@@ -92,7 +102,10 @@ class TestCli < Minitest::Test
     status, _, err = cli("import", "-b", "sqlite", "-d", @target_path, "--create-schema", stdin: jsonl)
 
     assert_equal 0, status
-    assert_equal "imported 3 event(s), skipped 0 already stored\n", err
+    lines = err.lines
+    assert_equal "imported 3 event(s), skipped 0 already stored\n", lines[0]
+    assert_match(/\Afile: exported \d{4}-\d\d-\d\dT\S+Z from DcbEventStore::SqliteStore by dcb_event_store \S+\n\z/,
+                 lines[1])
     source = @store.read(DcbEventStore::Query.all).map { |e| e.to_h.except(:sequence_position) }
     assert_equal(source, target_events.map { |e| e.to_h.except(:sequence_position) })
   end
@@ -107,6 +120,26 @@ class TestCli < Minitest::Test
     assert_equal 0, status
     assert_equal "imported 0 event(s), skipped 1 already stored\n", err
     assert_equal ["Seeded"], target_events.map(&:type)
+  end
+
+  def test_import_describes_every_header_field
+    header = '{"format":"dcb_event_store/events","version":1,"exported_at":"2026-01-02T03:04:05Z",' \
+             '"store":"S","gem_version":"9.9","query":[{"types":["A"],"tags":["t"]}],"after":4,"description":"d"}'
+    _, _, err = cli("import", "-b", "sqlite", "-d", @db_path, stdin: "#{header}\n")
+
+    assert_equal "file: exported 2026-01-02T03:04:05Z from S by dcb_event_store 9.9 query Query[A{t}] after 4 (d)\n",
+                 err.lines[1]
+  end
+
+  def test_import_describes_a_bare_header
+    _, _, err = cli("import", "-b", "sqlite", "-d", @db_path,
+                    stdin: %({"format":"dcb_event_store/events","version":1}\n))
+    assert_equal "file: exported at an unknown time\n", err.lines[1]
+  end
+
+  def test_import_of_a_file_without_header_prints_no_file_line
+    _, _, err = cli("import", "-b", "sqlite", "-d", @db_path, stdin: %({"type":"A"}\n))
+    assert_equal 1, err.lines.size
   end
 
   def test_import_without_schema_fails_cleanly
@@ -131,7 +164,7 @@ class TestCli < Minitest::Test
     status, out, = cli("export")
 
     assert_equal 0, status
-    assert_equal 3, out.lines.size
+    assert_equal 4, out.lines.size
   ensure
     ENV.delete("DCB_BACKEND")
     ENV.delete("DATABASE_URL")
