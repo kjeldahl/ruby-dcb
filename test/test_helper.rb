@@ -31,6 +31,7 @@ SimpleCov.start do
     "lib/dcb_event_store/decision_model.rb",
     "lib/dcb_event_store/upcaster.rb",
     "lib/dcb_event_store/event_file.rb",
+    "lib/dcb_event_store/event_file/header.rb",
     "lib/dcb_event_store/cli.rb",
     "lib/dcb_event_store/subscription.rb"
   ]

@@ -80,6 +80,7 @@ module DcbEventStore
         o.on("--type TYPE", "Only events of this type (repeatable: any of)") { |v| options[:types] << v }
         o.on("--tag TAG", "Only events carrying this tag (repeatable: all of)") { |v| options[:tags] << v }
         o.on("--after POSITION", Integer, "Only events after this sequence position") { |v| options[:after] = v }
+        o.on("--description TEXT", "Free text for the file's header line") { |v| options[:description] = v }
         o.separator ""
         o.separator "import:"
         o.on("--create-schema", "Install the schema first (idempotent)") { options[:create_schema] = true }
@@ -116,7 +117,7 @@ module DcbEventStore
                 Query.new([QueryItem.new(event_types: options[:types], tags: options[:tags])])
               end
       count = with_file(options[:file], "w", @stdout) do |io|
-        EventFile.export(store, io, query: query, after: options[:after])
+        EventFile.export(store, io, query: query, after: options[:after], description: options[:description])
       end
       @stderr.puts("exported #{count} event(s)")
     end
@@ -126,6 +127,18 @@ module DcbEventStore
         EventFile.import(store, io, batch_size: options[:batch_size])
       end
       @stderr.puts("imported #{result.imported} event(s), skipped #{result.skipped} already stored")
+      @stderr.puts(describe(result.header)) if result.header
+    end
+
+    # One line naming where an imported file came from.
+    def describe(header)
+      parts = ["exported #{header.exported_at&.iso8601 || 'at an unknown time'}"]
+      parts << "from #{header.store}" if header.store
+      parts << "by dcb_event_store #{header.gem_version}" if header.gem_version
+      parts << "query #{header.query}" unless header.query.match_all?
+      parts << "after #{header.after}" if header.after
+      parts << "(#{header.description})" if header.description
+      "file: #{parts.join(' ')}"
     end
 
     def with_file(path, mode, default, &)

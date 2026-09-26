@@ -32,7 +32,7 @@ class TestCliPostgres < Minitest::Test
 
     status, out, = cli("export", "-b", "postgres", "-d", "dcb_event_store_test")
     assert_equal 0, status
-    assert_equal([["A", 2]], out.lines.map { |l| JSON.parse(l).values_at("type", "schema_version") })
+    assert_equal([["A", 2]], out.lines.drop(1).map { |l| JSON.parse(l).values_at("type", "schema_version") })
   end
 
   def test_conninfo_string_and_url
@@ -42,7 +42,7 @@ class TestCliPostgres < Minitest::Test
 
     ["dbname=dcb_event_store_test", url].compact.each do |database|
       status, out, err = cli("export", "-b", "postgres", "-d", database)
-      assert_equal [0, 1], [status, out.lines.size], err
+      assert_equal [0, 2], [status, out.lines.size], err
     end
   end
 

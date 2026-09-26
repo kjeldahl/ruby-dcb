@@ -416,11 +416,19 @@ Events move in and out as [JSON Lines](https://jsonlines.org), one event per lin
 {"type":"StudentRegistered","tags":["student:s1"],"data":{"name":"Ada"}}
 ```
 
-Only `type` is required. Missing fields default: `data` `{}`, `tags` `[]`, `schema_version` 1, `created_at` the import time, `id` a fresh UUID. An export writes every field (plus `sequence_position`, informational only). Unknown keys are an error. Give seed lines an `id` if the file may be imported twice: stored ids are skipped, so a re-import is then a no-op. PostgreSQL needs ids that are UUIDs.
+An export starts with a header line saying what the file holds and where it came from:
+
+```jsonl
+{"format":"dcb_event_store/events","version":1,"exported_at":"2026-09-26T08:00:00.000000Z","gem_version":"0.4.2","store":"DcbEventStore::PostgresStore","query":[{"types":["CourseDefined"],"tags":[]}],"after":null,"description":"staging seed"}
+```
+
+`query` is the export's filter (`[]` for everything), `after` its position bound, `description` free text (`description:` / `--description`). The header is optional on import, so a seed file can be events alone; when present it must be the first line, `format` must match and `version` be one the gem reads (unknown keys are ignored). `EventFile.header(path_or_io)` reads it back, and `import` returns it as `result.header`.
+
+Only `type` is required on an event line. Missing fields default: `data` `{}`, `tags` `[]`, `schema_version` 1, `created_at` the import time, `id` a fresh UUID. An export writes every field (plus `sequence_position`, informational only). Unknown keys are an error. Give seed lines an `id` if the file may be imported twice: stored ids are skipped, so a re-import is then a no-op. PostgreSQL needs ids that are UUIDs.
 
 ```ruby
 DcbEventStore::EventFile.export(store, "events.jsonl")                   # or any IO
-DcbEventStore::EventFile.export(store, $stdout, query: query, after: 100)
+DcbEventStore::EventFile.export(store, $stdout, query: query, after: 100, description: "nightly backup")
 result = DcbEventStore::EventFile.import(store, "seeds.jsonl")          # batch_size: 1000 (nil = one transaction)
 result.imported # => 2   (also result.read, result.skipped)
 
@@ -433,7 +441,8 @@ From the shell, `dcb_events` (`bin/dcb_events` in a checkout) does the same:
 
 ```bash
 dcb_events export -b sqlite -d events.sqlite3 > events.jsonl
-dcb_events export -b postgres -d my_event_store --type CourseDefined --tag course:c1 --after 100 out.jsonl
+dcb_events export -b postgres -d my_event_store --type CourseDefined --tag course:c1 --after 100 \
+  --description "course c1 since 100" out.jsonl
 dcb_events import -b postgres -d postgres://localhost/my_event_store --create-schema seeds.jsonl
 dcb_events --help
 ```
