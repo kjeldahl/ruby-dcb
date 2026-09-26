@@ -124,6 +124,41 @@ class TestPostgresDialect < Minitest::Test
     assert_equal ["id-2", "B", "{}", "{}", nil, nil, 1], @dialect.insert_params(bare)
   end
 
+  # --- import_sql / import_params ---
+
+  def imported(**attrs)
+    DcbEventStore::SequencedEvent.new(
+      sequence_position: nil, type: "A", data: { n: 1 }, tags: ["t1"], id: "id-1",
+      causation_id: "c-1", correlation_id: "r-1", schema_version: 3,
+      created_at: Time.utc(2026, 6, 13, 22, 0, 0, 123_456), **attrs
+    )
+  end
+
+  def test_import_sql
+    expected = <<~SQL
+      INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+      VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7, COALESCE($8::timestamptz, now()))
+      ON CONFLICT (event_id) DO NOTHING
+      RETURNING sequence_position, created_at
+    SQL
+    assert_equal expected, @dialect.import_sql
+  end
+
+  def test_import_params_carry_schema_version_and_created_at
+    assert_equal ["id-1", "A", '{"n":1}', "{t1}", "c-1", "r-1", 3, "2026-06-13T22:00:00.123456Z"],
+                 @dialect.import_params(imported)
+  end
+
+  def test_import_params_default_schema_version_and_leave_created_at_to_the_database
+    params = @dialect.import_params(imported(schema_version: nil, created_at: nil))
+    assert_equal [1, nil], params.last(2)
+  end
+
+  def test_encode_timestamp_keeps_the_offset
+    assert_equal "2026-06-13T22:00:00.000001+02:00",
+                 @dialect.encode_timestamp(Time.new(2026, 6, 13, 22, 0, Rational(1, 1_000_000), "+02:00"))
+  end
+
   # --- encode_list / decode_list ---
 
   def test_encode_list_writes_a_pg_array_literal

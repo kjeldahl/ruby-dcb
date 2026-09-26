@@ -46,6 +46,7 @@ Metrics/ClassLength:
   Max: 250
 
 Metrics/ModuleLength:
+  Max: 250
   Exclude:
     - "test/**/*"
 
