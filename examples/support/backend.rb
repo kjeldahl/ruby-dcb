@@ -85,6 +85,10 @@ module Examples
         [store, nil]
       end
 
+      # Closes the session's own connection but keeps what #connect needs,
+      # so a server can drop it before forking workers that #connect their own.
+      def disconnect; end
+
       def close; end
     end
 
@@ -109,10 +113,11 @@ module Examples
         [DcbEventStore::PostgresStore.new(conn), closer]
       end
 
-      def close
+      def disconnect
         @connection&.close
         @connection = nil
       end
+      alias close disconnect
 
       def self.connect_raw
         conn = PG.connect(dbname: PG_DBNAME)
@@ -147,9 +152,13 @@ module Examples
         [DcbEventStore::SqliteStore.new(db), -> { db.close }]
       end
 
-      def close
+      def disconnect
         @connection&.close
         @connection = nil
+      end
+
+      def close
+        disconnect
         FileUtils.remove_entry(@dir) if @dir
         @dir = nil
       end
