@@ -42,9 +42,9 @@ module DcbEventStore
       # on top of the previous snapshot.
       def self.store(snapshots, projections, folded, namespace, event_store)
         due = projections.select do |name, proj|
-          due?(proj.snapshot, folded.entries[name], folded.positions.fetch(name)) &&
-            settled?(event_store, proj, folded, name)
+          due?(proj.snapshot, folded.entries[name], folded.positions.fetch(name))
         end
+        due = settled(event_store, due, folded)
         due.each do |name, proj|
           position = folded.positions.fetch(name)
           payload = identity(snapshots).merge(operation: :write, projection: name,
@@ -82,25 +82,36 @@ module DcbEventStore
         position - entry.position >= snapshot.every
       end
 
-      # Whether the events the projection folded are, for good, every event
-      # matching its query from its snapshot up to the position the new one
-      # would be written at. A read only vouches for what was committed when
-      # it ran: on PostgreSQL an event below that position can still be in
-      # flight, and a snapshot written past it would never fold it (issue
-      # #55). The event store checks (#settled?); a store without that check
-      # is taken at its read. Not settled: no write, a later build retries.
-      def self.settled?(event_store, proj, folded, name)
-        return true unless event_store.respond_to?(:settled?)
+      # The due projections whose folded events are, for good, every event
+      # matching their query from their snapshot up to the position the new
+      # one would be written at. A read only vouches for what was committed
+      # when it ran: on PostgreSQL an event below that position can still be
+      # in flight, and a snapshot written past it would never fold it (issue
+      # #55). The event store checks them, all in one call (#settled); a
+      # store without that check is taken at its read. A projection that
+      # folded an event past its position (another group's read, issued
+      # later, returned it) holds more than a snapshot there may, so it is
+      # not even asked about. Not settled: no write, a later build retries.
+      def self.settled(event_store, due, folded)
+        return due unless event_store.respond_to?(:settled)
 
-        events = folded.events_by_projection.fetch(name)
-        position = folded.positions.fetch(name)
-        return false if events.any? { |event| event.sequence_position > position }
+        candidates = due.reject do |name, _proj|
+          position = folded.positions.fetch(name)
+          folded.events_by_projection.fetch(name).any? { |event| event.sequence_position > position }
+        end
+        return candidates if candidates.empty?
 
-        event_store.settled?(proj.query, after: folded.entries[name]&.position, through: position,
-                                         count: events.size)
+        checks = candidates.map { |name, proj| settle_check(name, proj, folded) }
+        answers = event_store.settled(checks)
+        candidates.select.with_index { |_entry, index| answers.fetch(index) }
       end
 
-      private_class_method :entries_from, :identity, :due?, :settled?
+      def self.settle_check(name, proj, folded)
+        SettleCheck.new(query: proj.query, after: folded.entries[name]&.position,
+                        through: folded.positions.fetch(name), count: folded.events_by_projection.fetch(name).size)
+      end
+
+      private_class_method :entries_from, :identity, :due?, :settled, :settle_check
     end
   end
 end

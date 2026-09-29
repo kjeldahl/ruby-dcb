@@ -20,6 +20,7 @@ class TestNamespace < Minitest::Test
     assert_equal "event_tags", ns.event_tags_table
     assert_equal "projection_snapshots", ns.snapshots_table
     assert_equal "events_appended", ns.channel
+    assert_equal "events_tx_offset", ns.tx_offset_function
     assert_equal 0, ns.lock_offset
   end
 
@@ -39,6 +40,7 @@ class TestNamespace < Minitest::Test
     assert_equal "billing_event_tags", ns.event_tags_table
     assert_equal "billing_projection_snapshots", ns.snapshots_table
     assert_equal "billing_events_appended", ns.channel
+    assert_equal "billing_events_tx_offset", ns.tx_offset_function
   end
 
   def test_table_joins_the_name_to_any_base
@@ -157,7 +159,7 @@ class TestNamespace < Minitest::Test
   def test_longest_name_keeps_every_identifier_under_postgres_limit
     ns = Namespace.new("a" * Namespace::MAX_NAME_LENGTH)
 
-    [ns.events_table, ns.event_tags_table, ns.snapshots_table, ns.channel,
+    [ns.events_table, ns.event_tags_table, ns.snapshots_table, ns.channel, ns.tx_offset_function,
      "idx_#{ns.events_table}_correlation_id"].each do |identifier|
       assert_operator identifier.bytesize, :<=, 63, identifier
     end

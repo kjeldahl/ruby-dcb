@@ -53,14 +53,15 @@ module DcbEventStore
       # failing on the shared functions ("tuple concurrently updated") or on
       # the tables. The ALTER upgrades an events table from before tx_id:
       # its rows all take the installing transaction's id, so they keep
-      # their position order.
+      # their position order. See .tx_offset_sql for the rest of tx_id.
       def self.create_sql(namespace = nil)
         namespace = Namespace.wrap(namespace)
         events = namespace.events_table
-        snapshots = namespace.snapshots_table
+        tx_id = "BIGINT NOT NULL DEFAULT (pg_current_xact_id()::text::bigint + #{namespace.tx_offset_function}())"
         <<~SQL
           SELECT pg_advisory_xact_lock(#{INSTALL_LOCK_KEY});
 
+          #{tx_offset_function_sql(namespace)}
           CREATE TABLE IF NOT EXISTS #{events} (
             sequence_position BIGSERIAL PRIMARY KEY,
             event_id          UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -71,22 +72,22 @@ module DcbEventStore
             correlation_id    UUID,
             schema_version    INTEGER NOT NULL DEFAULT 1,
             created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-            tx_id             XID8 NOT NULL DEFAULT pg_current_xact_id()
+            tx_id             #{tx_id}
           );
-          ALTER TABLE #{events} ADD COLUMN IF NOT EXISTS tx_id XID8 NOT NULL DEFAULT pg_current_xact_id();
+          ALTER TABLE #{events} ADD COLUMN IF NOT EXISTS tx_id #{tx_id};
           CREATE UNIQUE INDEX IF NOT EXISTS idx_#{events}_event_id ON #{events} (event_id);
           CREATE INDEX IF NOT EXISTS idx_#{events}_type ON #{events} (type);
           CREATE INDEX IF NOT EXISTS idx_#{events}_tags ON #{events} USING GIN (tags);
           CREATE INDEX IF NOT EXISTS idx_#{events}_correlation_id ON #{events} (correlation_id);
           CREATE INDEX IF NOT EXISTS idx_#{events}_tx_id ON #{events} (tx_id, sequence_position);
-
+          #{rebase_tx_offset_sql(namespace)}
           #{FUNCTIONS_SQL}
           DROP TRIGGER IF EXISTS enforce_append_only ON #{events};
           CREATE TRIGGER enforce_append_only
             BEFORE UPDATE OR DELETE ON #{events}
             FOR EACH ROW EXECUTE FUNCTION prevent_event_mutation();
 
-          CREATE TABLE IF NOT EXISTS #{snapshots} (
+          CREATE TABLE IF NOT EXISTS #{namespace.snapshots_table} (
             key        TEXT PRIMARY KEY,
             position   BIGINT NOT NULL,
             state      JSONB NOT NULL,
@@ -95,11 +96,53 @@ module DcbEventStore
         SQL
       end
 
+      # tx_id is the appending transaction's id plus a per-namespace offset,
+      # held by a function so the column default and the subscription's
+      # watermark (PostgresStore::Dialect#settled_clause) read the same one.
+      # Created at 0; an existing function keeps its value.
+      def self.tx_offset_function_sql(namespace)
+        function = namespace.tx_offset_function
+        <<~SQL
+          DO $$ BEGIN
+            IF to_regprocedure('#{function}()') IS NULL THEN
+              CREATE FUNCTION #{function}() RETURNS bigint LANGUAGE sql STABLE AS 'SELECT 0::bigint';
+            END IF;
+          END $$;
+        SQL
+      end
+
+      # Transaction ids are the cluster's own: rows restored from a dump of a
+      # cluster whose counter ran further than this one's carry ids this one
+      # has not reached yet. They would never count as settled, and new
+      # appends would sort before them. So when the table holds a tx_id past
+      # any this cluster could have written, the offset moves up to put new
+      # appends after it. No row is rewritten, so their order and positions
+      # stay as they were. The table lock keeps appends out while it runs.
+      def self.rebase_tx_offset_sql(namespace)
+        events = namespace.events_table
+        function = namespace.tx_offset_function
+        <<~SQL
+          DO $$
+          DECLARE
+            newest bigint;
+            xid bigint := pg_current_xact_id()::text::bigint;
+          BEGIN
+            LOCK TABLE #{events} IN SHARE ROW EXCLUSIVE MODE;
+            SELECT max(tx_id) INTO newest FROM #{events};
+            IF newest > xid + #{function}() THEN
+              EXECUTE format('CREATE OR REPLACE FUNCTION #{function}() RETURNS bigint LANGUAGE sql STABLE AS %L',
+                             format('SELECT %s::bigint', newest + 1 - xid));
+            END IF;
+          END $$;
+        SQL
+      end
+
       def self.drop_sql(namespace = nil)
         namespace = Namespace.wrap(namespace)
         <<~SQL
           DROP TABLE IF EXISTS #{namespace.events_table} CASCADE;
           DROP TABLE IF EXISTS #{namespace.snapshots_table};
+          DROP FUNCTION IF EXISTS #{namespace.tx_offset_function}();
         SQL
       end
 

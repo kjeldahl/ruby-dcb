@@ -102,14 +102,17 @@ module DcbEventStore
       unlisten
     end
 
-    # Whether a snapshot of +query+'s events may be written at +through+:
-    # exactly +count+ events match it in (+after+, +through+] (+after+ nil =
-    # from the start), and no append that could still add one there is in
-    # flight. Default: a count alone, which is enough where positions commit
-    # in order, since an append still in flight then holds positions past
-    # every committed one. PostgresStore overrides it.
+    # Answers each SettleCheck: whether a snapshot of its query's events may
+    # be written at its +through+. Default: a count alone, which is enough
+    # where positions commit in order, since an append still in flight then
+    # holds positions past every committed one. PostgresStore overrides it.
+    def settled(checks)
+      checks.map { |check| count_between(check.query, check.after, check.through) == check.count }
+    end
+
+    # #settled for one check.
     def settled?(query, after:, through:, count:)
-      count_between(query, after, through) == count
+      settled([SettleCheck.new(query: query, after: after, through: through, count: count)]).first
     end
 
     private

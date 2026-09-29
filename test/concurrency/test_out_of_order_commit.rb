@@ -15,7 +15,11 @@ class TestOutOfOrderCommit < Minitest::Test
   cover "DcbEventStore::PostgresStore#fetch_in_commit_order"
   cover "DcbEventStore::PostgresStore#wait_for_append"
   cover "DcbEventStore::PostgresStore#settled?"
-  cover "DcbEventStore::PostgresStore#settle_locks?"
+  cover "DcbEventStore::PostgresStore#settled"
+  cover "DcbEventStore::PostgresStore#settle"
+  cover "DcbEventStore::PostgresStore#settle_locks!"
+  cover "DcbEventStore::PostgresStore#settle_lock_timeout"
+  cover "DcbEventStore::PostgresStore#pending?"
 
   def setup
     setup_db
@@ -186,7 +190,7 @@ class TestOutOfOrderCommit < Minitest::Test
     )
   end
 
-  # settled? fails while an append that could write a match is in flight,
+  # settled? fails while an append that could write a match stays in flight,
   # and only then: a query on a tag the append does not touch settles.
   def test_settled_fails_only_for_queries_an_in_flight_append_can_match
     @store.append([event("Tick", "b")])
@@ -202,8 +206,67 @@ class TestOutOfOrderCommit < Minitest::Test
     assert @store.settled?(query(item(tags: ["a"])), after: nil, through: 2, count: 1)
   end
 
-  # The try-locks are released with the check: a later append on the tag
-  # does not wait on them.
+  # A store whose settle checks wait long enough for a test to see them
+  # waiting.
+  class PatientStore < DcbEventStore::PostgresStore
+    private
+
+    def settle_lock_timeout = "5s"
+  end
+
+  # The check waits for the locks: an append in flight that commits within
+  # the lock timeout is counted, not failed on. Released only once the check
+  # is seen waiting on its lock.
+  def test_settled_waits_for_an_append_in_flight
+    @store.append([event("Tick", "b")])
+    with_in_flight_append([event("Tick", "a")]) do |release|
+      tick = query(item(event_types: ["Tick"]))
+      settling = Thread.new { PatientStore.new(connection).settled?(tick, after: nil, through: 2, count: 2) }
+      wait_for_a_lock_wait
+      release.call
+      assert settling.value
+    end
+  end
+
+  def wait_for_a_lock_wait
+    deadline = Time.now + 3
+    until @conn.exec("SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted").ntuples.positive?
+      flunk "settle check never waited on a lock" if Time.now > deadline
+      sleep 0.01
+    end
+  end
+
+  # One transaction for a batch: a check whose lock times out does not fail
+  # the ones after it.
+  def test_settled_answers_each_check_of_a_batch
+    @store.append([event("Tick", "b")])
+    check = ->(q, count) { DcbEventStore::SettleCheck.new(query: q, after: nil, through: 1, count: count) }
+    with_in_flight_append([event("Tick", "a")]) do |release|
+      answers = @store.settled([check.call(query(item(tags: ["a"])), 0), check.call(query(item(tags: ["b"])), 1),
+                                check.call(query(item(tags: ["b"])), 2)])
+      assert_equal [false, true, false], answers
+      release.call
+    end
+  end
+
+  # NOTIFYs queued while the subscriber was busy (a long catch-up) are
+  # drained by one wake-up, not answered with an empty read each.
+  def test_waiting_drains_queued_notifications
+    conn = connection
+    store = DcbEventStore::PostgresStore.new(conn)
+    store.send(:listen)
+    3.times { @store.append([event("A", "a")]) }
+    # A round trip on the listening connection: its backend sends every
+    # notification committed so far ahead of the result.
+    conn.exec("SELECT 1")
+
+    store.send(:wait_for_append)
+
+    assert_nil conn.wait_for_notify(0)
+  end
+
+  # The locks are released with the check: a later append on the tag does
+  # not wait on them.
   def test_settled_releases_its_locks
     @store.settled?(query(item(tags: ["a"])), after: nil, through: 0, count: 0)
     @store.settled?(query(item(event_types: ["Tick"])), after: nil, through: 0, count: 0)

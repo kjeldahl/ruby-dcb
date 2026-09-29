@@ -169,17 +169,17 @@ class TestDecisionModelUnit < Minitest::Test
                                   snapshot: DcbEventStore::Snapshot.new(name: name, version: 1, every: every))
   end
 
-  # Delegates reads to the store and answers settled? with +settled+,
-  # recording what it was asked.
+  # Delegates reads to the store and answers every settle check with
+  # +settled+, recording what each call asked.
   def settling(store, settled)
     calls = []
     duck = Object.new
     duck.define_singleton_method(:last_position) { store.last_position }
     duck.define_singleton_method(:read) { |query| store.read(query) }
     duck.define_singleton_method(:read_from) { |query, after:| store.read_from(query, after: after) }
-    duck.define_singleton_method(:settled?) do |query, after:, through:, count:|
-      calls << [query, after, through, count]
-      settled
+    duck.define_singleton_method(:settled) do |checks|
+      calls << checks.map { |c| [c.query, c.after, c.through, c.count] }
+      checks.map { settled }
     end
     [duck, calls]
   end
@@ -200,7 +200,7 @@ class TestDecisionModelUnit < Minitest::Test
 
     assert_equal 3, result.states[:p]
     assert_equal 1, snapshots.fetch(key).position
-    assert_equal [[proj.query, 1, 3, 2]], calls
+    assert_equal [[[proj.query, 1, 3, 2]]], calls
   end
 
   def test_a_snapshot_the_store_settles_is_written
@@ -212,7 +212,7 @@ class TestDecisionModelUnit < Minitest::Test
     DcbEventStore::DecisionModel.build(store, snapshots: snapshots, p: proj)
 
     assert_equal 1, snapshots.fetch(proj.snapshot.key(proj.query)).position
-    assert_equal [[proj.query, nil, 1, 1]], calls
+    assert_equal [[[proj.query, nil, 1, 1]]], calls
   end
 
   # Only due snapshots are checked.

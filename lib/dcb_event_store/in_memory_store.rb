@@ -76,10 +76,18 @@ module DcbEventStore
       nil
     end
 
-    # Same contract as SqlStore#settled?. Single-threaded, so nothing is
-    # ever in flight: the count alone decides.
+    # Same contract as SqlStore#settled. Single-threaded, so nothing is ever
+    # in flight: the count alone decides.
+    def settled(checks)
+      checks.map do |check|
+        matching = each_matching(check.query, after: check.after)
+        matching.count { |event| event.sequence_position <= check.through } == check.count
+      end
+    end
+
+    # #settled for one check.
     def settled?(query, after:, through:, count:)
-      each_matching(query, after: after).count { |event| event.sequence_position <= through } == count
+      settled([SettleCheck.new(query: query, after: after, through: through, count: count)]).first
     end
 
     private
