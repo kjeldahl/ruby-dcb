@@ -70,6 +70,12 @@ module DcbEventStore
         "sequence_position > ?"
       end
 
+      # Matches events stored at or before sequence position +through+.
+      def through_clause(params, through)
+        params << through
+        "sequence_position <= ?"
+      end
+
       # One "(...)" row fragment for a multi-row INSERT ... VALUES, appending
       # the event's parameters to +params+. No casts: SQLite takes the bound
       # values as they are.

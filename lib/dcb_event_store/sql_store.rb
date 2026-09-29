@@ -81,21 +81,55 @@ module DcbEventStore
       instrument_import(events) { import_in_transaction(events) }
     end
 
+    # Delivers every event matching +query+ (after position +after+), then
+    # blocks and delivers new ones as they are committed. How far it got is
+    # a cursor only the backend reads: a position where events commit in
+    # position order, more on a backend where they need not (see
+    # PostgresStore#subscription_cursor).
+    #
+    # Listens before catching up: an append committed between the catch-up
+    # read and the start of listening would otherwise wake nobody.
     def subscribe(query, after: nil, &block)
-      catch_up = after ? read_from(query, after: after) : read(query)
-      last_pos = instrument_subscribe(catch_up, query, :catch_up, &block) || after
-
       listen
+      cursor = subscription_cursor(after)
+      cursor = deliver_new(query, cursor, :catch_up, &block)
+
       loop do
         wait_for_append
-        new_events = read_from(query, after: last_pos || 0)
-        last_pos = instrument_subscribe(new_events, query, :live, &block) || last_pos
+        cursor = deliver_new(query, cursor, :live, &block)
       end
     ensure
       unlisten
     end
 
+    # Answers each SettleCheck: whether a snapshot of its query's events may
+    # be written at its +through+. Default: a count alone, which is enough
+    # where positions commit in order, since an append still in flight then
+    # holds positions past every committed one. PostgresStore overrides it.
+    def settled(checks)
+      checks.map { |check| count_between(check.query, check.after, check.through) == check.count }
+    end
+
+    # #settled for one check.
+    def settled?(query, after:, through:, count:)
+      settled([SettleCheck.new(query: query, after: after, through: through, count: count)]).first
+    end
+
     private
+
+    # The cursor a subscription starts from. Here a position: events commit
+    # in position order (a single writer), so none can later appear below
+    # the last one delivered.
+    def subscription_cursor(after)
+      after
+    end
+
+    # Delivers what matches +query+ past +cursor+ and returns the cursor
+    # moved past it.
+    def deliver_new(query, cursor, phase, &)
+      events = phase == :live || cursor ? read_from(query, after: cursor || 0) : read(query)
+      instrument_subscribe(events, query, phase, &) || cursor
+    end
 
     def import_in_transaction(events)
       with_write_transaction do
@@ -174,6 +208,12 @@ module DcbEventStore
     # Number of stored events matching +query+ after position +after+.
     def count_matching(query, after)
       raise NotImplementedError, "#{self.class} must implement #count_matching"
+    end
+
+    # Number of stored events matching +query+ in (+after+, +through+],
+    # +after+ nil meaning from the start.
+    def count_between(query, after, through)
+      raise NotImplementedError, "#{self.class} must implement #count_between"
     end
 
     # Inserts one event, returning its row (at least sequence_position and

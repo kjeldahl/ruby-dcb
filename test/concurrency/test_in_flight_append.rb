@@ -1,5 +1,6 @@
 require_relative "../test_helper"
 require_relative "../support/postgres_database"
+require_relative "../support/in_flight_append"
 require "concurrent"
 
 # Issue #42: an append caught in flight (locks held, rows uncommitted) must
@@ -7,6 +8,7 @@ require "concurrent"
 # writing a tag its own condition names, whichever side is conditional.
 class TestInFlightAppend < Minitest::Test
   include PostgresDatabaseHelper
+  include InFlightAppendHelper
 
   cover "DcbEventStore::PostgresStore#acquire_locks!"
   cover "DcbEventStore::PostgresStore#lock_for_import!"
@@ -19,87 +21,53 @@ class TestInFlightAppend < Minitest::Test
     teardown_db
   end
 
-  # A store whose write transaction stays open, locks held and rows
-  # uncommitted, until the test releases it: an append caught in flight.
-  # +paused+ is set once it holds its locks and has inserted.
-  class PausingStore < DcbEventStore::PostgresStore
-    def initialize(conn, paused:, release:, namespace: nil)
-      super(conn, namespace: namespace)
-      @paused = paused
-      @release = release
-    end
-
-    private
-
-    def with_write_transaction
-      super do
-        result = yield
-        @paused.set
-        @release.wait
-        result
-      end
-    end
-  end
-
   def query(event_types, tags = [])
     DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: event_types, tags: tags)])
   end
 
-  # Starts +in_flight+ (the arguments of #append, or a callable given the
-  # store) on a paused store in +in_flight_namespace+ and, once it holds its
-  # locks and has inserted, runs +racing+ on another connection. Returns what +racing+
-  # produced, having checked it stayed blocked until the in-flight append
-  # committed (or, with +blocks: false+, that it did not wait at all). A
-  # racing append that does not block is the bug of issue #42: its condition
-  # is evaluated against a log missing the in-flight event.
-  def race(in_flight:, racing:, blocks: true, racing_namespace: nil, in_flight_namespace: nil)
-    paused_at = Concurrent::Event.new
-    release = Concurrent::Event.new
-    paused_conn = PostgresDatabaseHelper.connection
-    paused = Thread.new do
-      store = PausingStore.new(paused_conn, paused: paused_at, release: release, namespace: in_flight_namespace)
-      in_flight.respond_to?(:call) ? in_flight.call(store) : store.append(*in_flight)
-    end
-    wait_for_locks(paused, paused_at)
-
+  # Starts +in_flight+ (the arguments of #append, or a callable handed the
+  # block to run while its write is in flight, e.g. one calling
+  # #with_in_flight_import) and, once it holds its locks and has inserted,
+  # runs +racing+ on another connection. Returns what +racing+ produced,
+  # having checked it stayed blocked until the in-flight write committed (or,
+  # with +blocks: false+, that it did not wait at all). A racing append that
+  # does not block is the bug of issue #42: its condition is evaluated
+  # against a log missing the in-flight event.
+  def race(in_flight:, racing:, blocks: true, racing_namespace: nil)
     racer_conn = PostgresDatabaseHelper.connection
     outcome = Concurrent::Array.new
-    racer = Thread.new do
-      racing.call(DcbEventStore::PostgresStore.new(racer_conn, namespace: racing_namespace))
-      outcome << :appended
-    rescue DcbEventStore::ConditionNotMet
-      outcome << :conflict
+    racer = nil
+    start_in_flight(in_flight) do |release|
+      racer = Thread.new do
+        racing.call(DcbEventStore::PostgresStore.new(racer_conn, namespace: racing_namespace))
+        outcome << :appended
+      rescue DcbEventStore::ConditionNotMet
+        outcome << :conflict
+      end
+
+      racer.join(0.3)
+      assert_blocking(outcome, blocks)
+
+      release.call
+      racer.join(5)
     end
-
-    racer.join(0.3)
-    assert_blocking(outcome, blocks)
-
-    release.set
-    paused.join(5)
-    racer.join(5)
     outcome.first
   ensure
-    release&.set
-    paused&.join(5)
     racer&.join(5)
-    paused_conn&.close
     racer_conn&.close
   end
 
-  # Blocks until the in-flight append holds its locks; an append that died
-  # on the way there (a lock statement that failed) raises here instead.
-  def wait_for_locks(paused, paused_at)
-    deadline = Time.now + 3
-    sleep 0.01 while paused.alive? && !paused_at.set? && Time.now < deadline
-    paused.value unless paused.alive?
-    assert paused_at.set?, "in-flight append never took its locks"
+  def start_in_flight(in_flight, &)
+    return in_flight.call(&) if in_flight.respond_to?(:call)
+
+    with_in_flight_append(*in_flight, &)
   end
 
   def assert_blocking(outcome, blocks)
     if blocks
-      assert_empty outcome, "racing append did not wait for the in-flight append on the same tag"
+      assert_empty outcome, "racing append did not wait for the in-flight write on the same tag"
     else
-      refute_empty outcome, "racing append waited for an in-flight append on another tag"
+      refute_empty outcome, "racing append waited for an in-flight write on another tag"
     end
   end
 
@@ -185,20 +153,20 @@ class TestInFlightAppend < Minitest::Test
   def test_namespaced_import_blocks_its_own_namespace_only
     DcbEventStore::PostgresStore::Schema.create!(@conn, namespace: "billing")
     sub = -> { DcbEventStore::Event.new(type: "Sub", tags: ["course:c1"]) }
-    import = lambda do |store|
-      store.import([DcbEventStore::SequencedEvent.new(sequence_position: 1, type: "Sub", data: {}, tags: ["course:c1"],
-                                                      id: SecureRandom.uuid, created_at: Time.now,
-                                                      causation_id: nil, correlation_id: nil, schema_version: 1)])
+    import = lambda do |&run|
+      exported = DcbEventStore::SequencedEvent.new(
+        sequence_position: 1, type: "Sub", data: {}, tags: ["course:c1"], id: SecureRandom.uuid,
+        created_at: Time.now, causation_id: nil, correlation_id: nil, schema_version: 1
+      )
+      with_in_flight_import([exported], namespace: "billing", &run)
     end
 
-    outcome = race(in_flight: import, in_flight_namespace: "billing",
-                   racing: ->(store) { store.append([sub.call]) }, racing_namespace: "billing")
+    outcome = race(in_flight: import, racing: ->(store) { store.append([sub.call]) }, racing_namespace: "billing")
 
     assert_equal :appended, outcome
     assert_equal 2, DcbEventStore::PostgresStore.new(@conn, namespace: "billing").last_position
 
-    outcome = race(in_flight: import, in_flight_namespace: "billing",
-                   racing: ->(store) { store.append([sub.call]) }, blocks: false)
+    outcome = race(in_flight: import, racing: ->(store) { store.append([sub.call]) }, blocks: false)
 
     assert_equal :appended, outcome
     assert_equal 1, @store.last_position
