@@ -78,7 +78,8 @@ module DcbEventStore
              "PostgreSQL dbname, conninfo or URL; SQLite file path (default: $DATABASE_URL)") do |v|
           options[:database] = v
         end
-        o.on("-n", "--namespace NAME", "Bounded context (namespaced log) to read or write (default: the default log)") do |v|
+        o.on("-n", "--namespace NAME",
+             "Bounded context (namespaced log) to read or write (default: the default log)") do |v|
           options[:namespace] = v
         end
         o.separator ""

@@ -243,7 +243,8 @@ class TestCli < Minitest::Test
     assert_equal ["InvoiceIssued"], types(exported)
     assert_equal 3, types(default_export).size
 
-    status, _, err = cli("import", "-b", "sqlite", "-d", @target_path, "-n", "billing", "--create-schema", stdin: exported)
+    status, _, err = cli("import", "-b", "sqlite", "-d", @target_path, "-n", "billing", "--create-schema",
+                         stdin: exported)
     assert_equal 0, status, err
 
     db = SqliteDatabaseHelper.connection(@target_path)
