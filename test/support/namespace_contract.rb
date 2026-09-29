@@ -87,6 +87,22 @@ module NamespaceContract
     assert_empty billing.append([event(id: id)]), "a re-append inside the namespace is still skipped"
   end
 
+  # Issue #58: an import writes its own namespace's tables (and, on SQLite,
+  # tag rows that point at them), never the default log.
+  def test_import_writes_only_its_own_namespace
+    billing = build_namespaced_store("billing")
+    exported = DcbEventStore::SequencedEvent.new(
+      sequence_position: 9, type: "Billed", data: {}, tags: ["course:c1"],
+      id: "22222222-2222-4222-8222-222222222222", created_at: Time.utc(2026, 1, 1),
+      causation_id: nil, correlation_id: nil, schema_version: 1
+    )
+
+    assert_equal [1], billing.import([exported]).map(&:sequence_position)
+    assert_equal ["Billed"], billing.read(tagged("course:c1")).map(&:type)
+    assert_nil @store.last_position
+    assert_empty @store.read(tagged("course:c1")).to_a
+  end
+
   def test_snapshots_are_per_namespace
     default_snapshots = build_namespaced_snapshot_store(nil)
     billing_snapshots = build_namespaced_snapshot_store("billing")

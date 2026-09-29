@@ -178,6 +178,12 @@ class TestPostgresDialect < Minitest::Test
     assert_equal expected, @dialect.import_sql
   end
 
+  def test_namespaced_import_sql_writes_the_namespaced_table
+    dialect = DcbEventStore::PostgresStore::Dialect.new(namespace: "billing")
+
+    assert_equal @dialect.import_sql.sub("INTO events", "INTO billing_events"), dialect.import_sql
+  end
+
   def test_import_params_carry_schema_version_and_created_at
     assert_equal ["id-1", "A", '{"n":1}', "{t1}", "c-1", "r-1", 3, "2026-06-13T22:00:00.123456Z"],
                  @dialect.import_params(imported)

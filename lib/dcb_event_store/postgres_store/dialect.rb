@@ -113,7 +113,7 @@ module DcbEventStore
       # Takes #import_params.
       def import_sql
         <<~SQL
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+          INSERT INTO #{@events} (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
           VALUES ($1, $2, $3::jsonb, $4::text[], $5, $6, $7, COALESCE($8::timestamptz, now()))
           ON CONFLICT (event_id) DO NOTHING
           RETURNING sequence_position, created_at

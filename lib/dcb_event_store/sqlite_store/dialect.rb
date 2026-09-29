@@ -113,7 +113,7 @@ module DcbEventStore
       # default when nil). Takes #import_params.
       def import_sql
         <<~SQL
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+          INSERT INTO #{@events} (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER)))
           ON CONFLICT(event_id) DO NOTHING
           RETURNING sequence_position, created_at
