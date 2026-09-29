@@ -36,6 +36,20 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ["x", "y", '["A"]'], params
   end
 
+  # --- id_in ---
+
+  def test_id_in_binds_the_ids_as_json
+    params = []
+    assert_equal "event_id IN (SELECT value FROM json_each(?))", @dialect.id_in(params, %w[id1 id2])
+    assert_equal ['["id1","id2"]'], params
+  end
+
+  def test_id_in_appends_to_the_params_already_collected
+    params = %w[x y]
+    assert_equal "event_id IN (SELECT value FROM json_each(?))", @dialect.id_in(params, ["id1"])
+    assert_equal ["x", "y", '["id1"]'], params
+  end
+
   # --- tags_contain ---
 
   def test_tags_contain_binds_the_list_and_the_number_of_tags

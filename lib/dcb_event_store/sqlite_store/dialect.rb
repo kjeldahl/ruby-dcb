@@ -40,6 +40,12 @@ module DcbEventStore
         "type IN (SELECT value FROM json_each(?))"
       end
 
+      # Matches events whose id is one of +ids+.
+      def id_in(params, ids)
+        params << encode_list(ids)
+        "event_id IN (SELECT value FROM json_each(?))"
+      end
+
       # Matches events carrying all of +tags+, by counting how many of the
       # wanted tags each event has in the index table. The count must be
       # compared against the number of *distinct* tags, so the list is

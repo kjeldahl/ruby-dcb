@@ -51,6 +51,11 @@ module DcbEventStore
       @db.execute("#{sql} LIMIT ?", params + [limit])
     end
 
+    def fetch_by_ids(ids)
+      sql, params = @sql.by_ids_sql(ids)
+      @db.execute(sql, params)
+    end
+
     def max_position
       @db.get_first_value("SELECT max(sequence_position) FROM #{@namespace.events_table}")
     end

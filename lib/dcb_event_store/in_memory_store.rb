@@ -41,15 +41,25 @@ module DcbEventStore
       @rows.last&.fetch(:sequence_position)
     end
 
+    # Same contract as SqlStore#append, idempotency by event id included:
+    # every id stored returns the stored events, some raises DuplicateEvent.
     def append(events, condition = nil)
       events = Array(events)
       raise ArgumentError, "append needs at least one event" if events.empty?
 
-      instrument_append(events, condition) do
+      instrument_append(events, condition) do |payload|
+        ids = events.map(&:id).uniq
+        if ids.all? { |id| @ids.include?(id) }
+          payload[:replayed] = true
+          next replay(ids)
+        end
+        reject_stored!(ids)
         raise ConditionNotMet, "conflicting event(s)" if condition && conflicting_events?(condition)
 
+        # No id is stored, so at least the first event is written; a later
+        # one is skipped only when it repeats an id within the batch.
         sequenced = events.filter_map { |event| insert(event) }
-        notify_listeners unless sequenced.empty?
+        notify_listeners
         sequenced
       end
     end
@@ -104,6 +114,17 @@ module DcbEventStore
           yielder << row_to_sequenced_event(row)
         end
       end
+    end
+
+    # Some of +ids+ stored (all of them is a replay, handled before).
+    def reject_stored!(ids)
+      stored = ids.select { |id| @ids.include?(id) }
+      raise DuplicateEvent, stored unless stored.empty?
+    end
+
+    # The stored events with these ids, in log order.
+    def replay(ids)
+      @rows.filter_map { |row| row_to_sequenced_event(row) if ids.include?(row.fetch(:event_id)) }
     end
 
     def insert(event, created_at: Time.now, schema_version: 1)

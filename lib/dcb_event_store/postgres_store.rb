@@ -186,6 +186,11 @@ module DcbEventStore
       @conn.exec_params("#{sql} LIMIT #{limit}", params).to_a
     end
 
+    def fetch_by_ids(ids)
+      sql, params = @sql.by_ids_sql(ids)
+      @conn.exec_params(sql, params).to_a
+    end
+
     def max_position
       value = @conn.exec("SELECT max(sequence_position) FROM #{@namespace.events_table}")[0]["max"]
       value && Integer(value)
@@ -204,16 +209,13 @@ module DcbEventStore
       @conn.exec_params("SELECT acquire_sorted_advisory_locks($1::bigint[])", [key_array(tags)])
     end
 
-    def count_matching(query, after)
-      sql, params = @sql.condition_sql(query, after)
-      @conn.exec_params(sql, params)[0]["count"].to_i
-    end
-
     # PostgreSQL does the conditional append in a single statement: the CTE
     # evaluates the condition and the INSERT ... SELECT only writes rows when
     # the CTE found no conflict, so one round trip covers check and insert.
     # An empty RETURNING means either a conflict or that every event was a
-    # duplicate id, which the follow-up count tells apart.
+    # duplicate id, which SqlStore#replay tells apart -- so the common case
+    # stays one statement, and only an append that wrote nothing looks
+    # further.
     def append_with_condition(events, condition)
       cond_sql, cond_params = @sql.condition_sql(condition.fail_if_events_match, condition.after)
       value_rows, insert_params = @sql.values_clause(events, cond_params.size)
@@ -230,13 +232,6 @@ module DcbEventStore
         SQL
         cond_params + insert_params
       )
-
-      if result.ntuples.zero?
-        matching = count_matching(condition.fail_if_events_match, condition.after)
-        raise ConditionNotMet, "conflicting event(s)" if matching.positive?
-
-        return []
-      end
 
       events_by_id = events.to_h { |e| [e.id, e] }
       result.map do |row|
