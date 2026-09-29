@@ -5,10 +5,13 @@
 #
 # Resets the events table, then appends a few customer/order/course sagas -
 # each saga's events share a correlation_id (stamped by Client) so causation
-# and correlation are populated.
+# and correlation are populated. Also builds a few projection snapshots and
+# fills two extra namespaces ("billing", "shipping") so the browser's
+# namespace switcher and snapshot pages have something to show.
 
 require_relative "../lib/dcb_event_store"
 require "pg"
+require "dcb_event_store/web"
 
 DB = ENV.fetch("DCB_DB", "dcb_event_store_test")
 
@@ -16,6 +19,7 @@ conn = PG.connect(dbname: DB)
 conn.exec("SET client_min_messages TO warning")
 DcbEventStore::PostgresStore::Schema.create!(conn)
 conn.exec("TRUNCATE events RESTART IDENTITY")
+conn.exec("TRUNCATE projection_snapshots")
 
 store = DcbEventStore::PostgresStore.new(conn)
 
@@ -117,7 +121,67 @@ end
   total += 1
 end
 
+# --- Snapshots: what DecisionModel.build leaves behind -----------------------
+snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn)
+%w[dcb-101 es-201].each do |course_id|
+  subscriptions = DcbEventStore::Projection.new(
+    initial_state: 0,
+    handlers: { "StudentSubscribed" => ->(count, _e) { count + 1 } },
+    query: DcbEventStore::Query.new([
+      DcbEventStore::QueryItem.new(event_types: %w[StudentSubscribed], tags: ["course:#{course_id}"])
+    ]),
+    snapshot: DcbEventStore::Snapshot.new(name: "course_subscriptions", version: 1)
+  )
+  DcbEventStore::DecisionModel.build(store, snapshots: snapshots, subscriptions: subscriptions)
+end
+customers.each do |c|
+  spent = DcbEventStore::Projection.new(
+    initial_state: { orders: 0, total: 0.0 },
+    handlers: { "OrderPlaced" => ->(s, e) { { orders: s[:orders] + 1, total: s[:total] + e.data[:amount] } } },
+    query: DcbEventStore::Query.new([
+      DcbEventStore::QueryItem.new(event_types: %w[OrderPlaced], tags: ["customer:#{c[:id]}"])
+    ]),
+    snapshot: DcbEventStore::Snapshot.new(name: "customer_spend", version: 2)
+  )
+  DcbEventStore::DecisionModel.build(store, snapshots: snapshots, spend: spent)
+end
+# A new event after the snapshots were written, so one of them is behind head.
+store.append([ev("StudentSubscribed", { course_id: "dcb-101", customer_id: 4 }, "course:dcb-101", "customer:4")])
+total += 1
+
+# --- Other namespaces: separate logs in the same database --------------------
+%w[billing shipping].each do |name|
+  DcbEventStore::PostgresStore::Schema.drop!(conn, namespace: name)
+  DcbEventStore::PostgresStore::Schema.create!(conn, namespace: name)
+end
+billing = DcbEventStore::PostgresStore.new(PG.connect(dbname: DB), namespace: "billing")
+shipping = DcbEventStore::PostgresStore.new(PG.connect(dbname: DB), namespace: "shipping")
+
+(1..6).each do |n|
+  billing.append([ev("InvoiceIssued", { invoice: "INV-#{n}", amount: 20.0 * n }, "invoice:INV-#{n}")])
+  billing.append([ev("InvoicePaid", { invoice: "INV-#{n}" }, "invoice:INV-#{n}")]) if n.odd?
+end
+billing_snapshots = DcbEventStore::Snapshots::PostgresSnapshotStore.new(conn, namespace: "billing")
+open_invoices = DcbEventStore::Projection.new(
+  initial_state: [],
+  handlers: { "InvoiceIssued" => ->(open, e) { open + [e.data[:invoice]] },
+              "InvoicePaid" => ->(open, e) { open - [e.data[:invoice]] } },
+  query: DcbEventStore::Query.new([
+    DcbEventStore::QueryItem.new(event_types: %w[InvoiceIssued InvoicePaid], tags: [])
+  ]),
+  snapshot: DcbEventStore::Snapshot.new(name: "open_invoices", version: 1)
+)
+DcbEventStore::DecisionModel.build(billing, snapshots: billing_snapshots, open: open_invoices)
+
+3.times do |n|
+  shipping.append([ev("ParcelPacked", { parcel: "P-#{n}", weight_kg: 1.5 + n }, "parcel:P-#{n}"),
+                   ev("ParcelDispatched", { parcel: "P-#{n}", carrier: "DHL" }, "parcel:P-#{n}")])
+end
+
 puts "Seeded #{total} events into #{DB}."
 puts "Types: #{conn.exec('SELECT DISTINCT type FROM events ORDER BY type').map { |r| r['type'] }.join(', ')}"
+puts "Snapshots: #{conn.exec('SELECT count(*) FROM projection_snapshots').getvalue(0, 0)} (default), " \
+     "#{conn.exec('SELECT count(*) FROM billing_projection_snapshots').getvalue(0, 0)} (billing)"
+puts "Namespaces: #{DcbEventStore::Web::ReadModel.namespaces(conn).map { |n| n || 'default' }.join(', ')}"
 puts "Head position: #{conn.exec('SELECT max(sequence_position) FROM events').getvalue(0, 0)}"
 conn.close
