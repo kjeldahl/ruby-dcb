@@ -34,6 +34,12 @@ module DcbEventStore
         "type = ANY(#{placeholder(params.size)}::text[])"
       end
 
+      # Matches events whose id is one of +ids+.
+      def id_in(params, ids)
+        params << encode_list(ids)
+        "event_id = ANY(#{placeholder(params.size)}::uuid[])"
+      end
+
       # Matches events carrying all of +tags+. +after+ is accepted for
       # interface parity with the SQLite dialect and not needed here: the GIN
       # lookup is by tag and the position bound is applied by the outer

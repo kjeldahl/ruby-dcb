@@ -146,6 +146,8 @@ store.append(event, condition)
 # raises DcbEventStore::ConditionNotMet on conflict
 ```
 
+**Appends are idempotent by event id.** When every event's id is already stored, `append` takes it for a retry of an append that went through (its response lost) and returns the stored `SequencedEvent`s, without checking the condition — which the retry's own events would otherwise fail. Only ids are compared: a stored id answers with what was stored. A batch where some ids are stored and some are not raises `DcbEventStore::DuplicateEvent` (its `ids` are the stored ones) and writes nothing. The `append.dcb` payload of a retry carries `replayed: true` and `appended_count: 0`.
+
 Tags on an event are an index; tags in a condition are the boundary. An event may carry tags its condition never names (`order:` on an event guarded only by `idempotency:`, `student:` on an admin enrolment guarded only by `course:`): they are there for reads and other decisions, and the store still serializes the append against any condition naming them. Widening the condition to cover them would only widen the boundary and add conflicts.
 
 ### Projections and decision models
@@ -598,5 +600,5 @@ Nested constants resolve through the alias too (`Store::LockKeys`), so nothing b
 - **Indexed tags** — GIN index on the `tags` column on PostgreSQL, an `event_tags` index table on SQLite
 - **Namespaces** — one `Namespace` value names the tables, channel and lock-key offset a store uses; several bounded contexts keep separate logs in one database
 - **Append-only** — database triggers prevent UPDATE/DELETE
-- **Idempotent writes** — `ON CONFLICT (event_id) DO NOTHING`
+- **Idempotent writes** — `ON CONFLICT (event_id) DO NOTHING`; an append whose ids are all stored returns the stored events, conditional or not; PostgreSQL keeps its single-statement conditional append and only looks the ids up when nothing was written
 - **`Data.define`** for immutable value objects (Event, SequencedEvent, Query, etc.)

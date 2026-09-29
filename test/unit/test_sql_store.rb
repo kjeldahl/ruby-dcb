@@ -88,6 +88,10 @@ class TestSqlStore < Minitest::Test
       @rows.drop(after.to_i).first(limit)
     end
 
+    def fetch_by_ids(ids)
+      @rows.select { |row| ids.include?(row["event_id"]) }
+    end
+
     def notify_appended(position)
       @notified << position
     end
@@ -117,6 +121,7 @@ class TestSqlStore < Minitest::Test
     refute_implemented(:lock_for_import!)
     refute_implemented(:import_event, event)
     refute_implemented(:fetch_batch, DcbEventStore::Query.all, after: nil, limit: 10)
+    refute_implemented(:fetch_by_ids, ["id"])
     refute_implemented(:notify_appended, 1)
     refute_implemented(:listen)
     refute_implemented(:unlisten)
@@ -151,12 +156,52 @@ class TestSqlStore < Minitest::Test
     assert_empty @store.notified
   end
 
-  def test_append_skips_duplicate_ids_without_notifying_again
-    duplicate = event(type: "A")
-    @store.append([duplicate])
+  def test_append_of_stored_ids_returns_the_stored_events_without_notifying_again
+    first = event(type: "A", data: {x: 1})
+    second = event(type: "B")
+    @store.append([first, second])
 
-    assert_empty @store.append([duplicate])
+    replayed = @store.append([first, second])
+    assert_equal [1, 2], replayed.map(&:sequence_position)
+    assert_equal [first.id, second.id], replayed.map(&:id)
+    assert_equal({x: 1}, replayed[0].data)
+    assert_equal 2, @store.rows.size
+    assert_equal [2], @store.notified
+  end
+
+  def test_append_of_some_stored_ids_raises_duplicate_event_without_notifying
+    stored = event(type: "A")
+    @store.append([stored])
+
+    error = assert_raises(DcbEventStore::DuplicateEvent) { @store.append([stored, event(type: "B")]) }
+    assert_equal [stored.id], error.ids
     assert_equal [1], @store.notified
+  end
+
+  def test_append_repeating_an_id_within_the_batch_writes_it_once
+    e = event(type: "A")
+
+    assert_equal [1], @store.append([e, e]).map(&:sequence_position)
+    assert_equal 1, @store.rows.size
+  end
+
+  def test_conditional_retry_returns_the_stored_events_despite_the_condition
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: DcbEventStore::Query.all)
+    e = event(type: "A")
+    @store.append([e], condition)
+    @store.matching_count = 1
+
+    assert_equal [e.id], @store.append([e], condition).map(&:id)
+  end
+
+  def test_conflicting_condition_with_some_stored_ids_raises_duplicate_event
+    stored = event(type: "A")
+    @store.append([stored])
+    @store.matching_count = 1
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: DcbEventStore::Query.all)
+
+    error = assert_raises(DcbEventStore::DuplicateEvent) { @store.append([event(type: "B"), stored], condition) }
+    assert_equal [stored.id], error.ids
   end
 
   def test_append_without_condition_still_locks

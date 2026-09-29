@@ -41,11 +41,19 @@ module DcbEventStore
       max_position
     end
 
+    # Appends +events+, guarded by +condition+ when given, and returns their
+    # SequencedEvents.
+    #
+    # Idempotent by event id: when every id is already stored, the append is
+    # taken for a retry of one that went through (its response lost) and
+    # returns the stored events, without checking +condition+ -- which the
+    # retry's own events would otherwise fail. Ids are all that is compared.
+    # Some ids stored and some not raises DuplicateEvent and writes nothing.
     def append(events, condition = nil)
       events = Array(events)
       raise ArgumentError, "append needs at least one event" if events.empty?
 
-      instrument_append(events, condition) do
+      instrument_append(events, condition) do |payload|
         with_write_transaction do
           acquire_locks!(events, condition)
 
@@ -54,10 +62,14 @@ module DcbEventStore
                       else
                         append_without_condition(events)
                       end
+          if sequenced.empty?
+            stored = replay(events)
+            payload[:replayed] = true
+            next stored
+          end
 
-          notify_position = sequenced.last&.sequence_position
-          notify_appended(notify_position) if notify_position
-
+          reject_partial_duplicates!(events, sequenced)
+          notify_appended(sequenced.last.sequence_position)
           sequenced
         end
       end
@@ -136,16 +148,41 @@ module DcbEventStore
     # insert. Safe because the transaction plus #acquire_locks! serializes it
     # against competing appends. Backends that can do better (PostgreSQL
     # folds check and insert into one statement) override this.
+    #
+    # A failed condition writes nothing and returns no events, like an
+    # append whose ids are all stored: #replay tells the two apart, and so
+    # only runs its lookup when nothing was written.
     def append_with_condition(events, condition)
       matching = count_matching(condition.fail_if_events_match, condition.after)
-      raise ConditionNotMet, "conflicting event(s)" if matching.positive?
+      return [] if matching.positive?
 
       append_without_condition(events)
     end
 
+    # An append that wrote nothing: either every id is stored (a retry,
+    # answered with the stored events) or the condition failed. Checked in
+    # that order, so a retry never trips over its own events.
+    def replay(events)
+      ids = events.map(&:id).uniq
+      stored = fetch_by_ids(ids)
+      raise ConditionNotMet, "conflicting event(s)" if stored.empty?
+
+      stored_ids = stored.map { |row| row["event_id"] }
+      raise DuplicateEvent, stored_ids if stored_ids.size < ids.size
+
+      stored.map { |row| @row_mapper.to_sequenced_event(row) }
+    end
+
+    # An append that wrote some events but skipped others as stored. Raising
+    # rolls the written ones back.
+    def reject_partial_duplicates!(events, sequenced)
+      skipped = events.map(&:id).uniq - sequenced.map(&:id)
+      raise DuplicateEvent, skipped unless skipped.empty?
+    end
+
     # Inserts the events one by one, skipping the ones whose event_id is
-    # already stored (idempotent re-append) and returning a SequencedEvent
-    # for each row that was actually written.
+    # already stored and returning a SequencedEvent for each row that was
+    # actually written.
     def append_without_condition(events)
       events.filter_map do |event|
         row = insert_event(event)
@@ -180,6 +217,12 @@ module DcbEventStore
     # created_at) or nil when an event with the same id already exists.
     def insert_event(event)
       raise NotImplementedError, "#{self.class} must implement #insert_event"
+    end
+
+    # The stored rows (as #fetch_batch returns them) whose event_id is one of
+    # +ids+, ordered by ascending sequence position.
+    def fetch_by_ids(ids)
+      raise NotImplementedError, "#{self.class} must implement #fetch_by_ids"
     end
 
     # Takes the lock that keeps every append out while an import runs. May

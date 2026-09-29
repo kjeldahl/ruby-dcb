@@ -127,6 +127,14 @@ class TestSqlBuilder < Minitest::Test
     end
   end
 
+  # --- by_ids_sql ---
+
+  def test_by_ids_sql_selects_the_ids_in_log_order
+    sql, params = @builder.by_ids_sql(%w[id1 id2])
+    assert_equal "SELECT * FROM events WHERE event_id = ANY($1::uuid[]) ORDER BY sequence_position ASC", sql
+    assert_equal ["{id1,id2}"], params
+  end
+
   # --- condition_sql ---
 
   def test_condition_sql_match_all
@@ -167,6 +175,9 @@ class TestSqlBuilder < Minitest::Test
 
     sql, = builder.condition_sql(DcbEventStore::Query.all, 9)
     assert_equal "SELECT COUNT(*) FROM billing_events WHERE sequence_position > $1", sql
+
+    sql, = builder.by_ids_sql(["x"])
+    assert_equal "SELECT * FROM billing_events WHERE event_id = ANY($1::uuid[]) ORDER BY sequence_position ASC", sql
   end
 
   def test_namespace_accepts_a_namespace_object
@@ -288,6 +299,15 @@ class TestSqlBuilderSqlite < Minitest::Test
                "AND sequence_position > ? ORDER BY sequence_position ASC"
     assert_equal expected, sql
     assert_equal ['["A"]', 3], params
+  end
+
+  # --- by_ids_sql ---
+
+  def test_by_ids_sql_selects_the_ids_in_log_order
+    sql, params = @builder.by_ids_sql(["id1"])
+    assert_equal "SELECT * FROM events WHERE event_id IN (SELECT value FROM json_each(?)) " \
+                 "ORDER BY sequence_position ASC", sql
+    assert_equal ['["id1"]'], params
   end
 
   # --- condition_sql ---

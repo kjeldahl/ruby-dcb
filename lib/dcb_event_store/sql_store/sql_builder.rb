@@ -37,6 +37,14 @@ module DcbEventStore
         [sql, params]
       end
 
+      # SELECT of the stored events whose id is one of +ids+, ordered by
+      # ascending sequence position: what an append whose ids are all stored
+      # answers with.
+      def by_ids_sql(ids)
+        params = []
+        ["SELECT * FROM #{@events} WHERE #{@dialect.id_in(params, ids)} ORDER BY sequence_position ASC", params]
+      end
+
       # SELECT COUNT(*) used to evaluate an AppendCondition (and to total the
       # browser): how many existing events match +query+ after +after+.
       def condition_sql(query, after)

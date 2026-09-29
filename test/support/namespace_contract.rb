@@ -83,8 +83,10 @@ module NamespaceContract
     id = "11111111-1111-4111-8111-111111111111"
 
     assert_equal 1, @store.append([event(id: id)]).size
-    assert_equal 1, billing.append([event(id: id)]).size
-    assert_empty billing.append([event(id: id)]), "a re-append inside the namespace is still skipped"
+    billed = billing.append([event(id: id)])
+    assert_equal [1], billed.map(&:sequence_position)
+    assert_equal billed, billing.append([event(id: id)]), "a re-append inside the namespace returns its own event"
+    assert_equal 1, billing.read(DcbEventStore::Query.all).count
   end
 
   def test_snapshots_are_per_namespace
