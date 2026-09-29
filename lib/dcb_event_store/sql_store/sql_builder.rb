@@ -23,12 +23,14 @@ module DcbEventStore
       ORDERS = { asc: "ASC", desc: "DESC" }.freeze
 
       # SELECT for reading the event stream matching +query+, optionally only
-      # events after +after+. +order+ (:asc/:desc) sets the sequence_position
-      # ordering; +limit+/+offset+ page the result (used by the read-only
-      # browser). Defaults reproduce the store's ascending full-stream read.
-      def read_sql(query, after:, order: :asc, limit: nil, offset: nil)
+      # events after +after+ and/or before +before+. +order+ (:asc/:desc) sets
+      # the sequence_position ordering -- :desc for a backwards read;
+      # +limit+/+offset+ page the result (limit per page of a store read,
+      # offset for the read-only browser). Defaults reproduce the store's
+      # ascending full-stream read.
+      def read_sql(query, after: nil, before: nil, order: :asc, limit: nil, offset: nil) # rubocop:disable Metrics/ParameterLists
         direction = ORDERS.fetch(order) { raise ArgumentError, "order must be :asc or :desc" }
-        where, params = where_clause(query, after)
+        where, params = where_clause(query, after, before)
         sql = "SELECT * FROM #{@events}"
         sql += " WHERE #{where}" if where
         sql += " ORDER BY sequence_position #{direction}"
@@ -58,28 +60,24 @@ module DcbEventStore
 
       private
 
-      def where_clause(query, after)
-        return match_all_where(after) if query.match_all?
-
+      # The item clauses OR-ed together (none for a match-all query), then
+      # the position bounds AND-ed on, the items' parameters first.
+      def where_clause(query, after, before = nil)
         params = []
-        clauses = query.items.map { |item| item_clause(item, params, after) }
-        where = clauses.join(" OR ")
-        where = "(#{where}) AND #{@dialect.after_clause(params, after)}" if after
+        where = query.items.map { |item| item_clause(item, params, after, before) }.join(" OR ") unless query.match_all?
+        bounds = []
+        bounds << @dialect.after_clause(params, after) if after
+        bounds << @dialect.before_clause(params, before) if before
+        return [where, params] if bounds.empty?
 
-        [where, params]
+        bounds = bounds.join(" AND ")
+        [where ? "(#{where}) AND #{bounds}" : bounds, params]
       end
 
-      def match_all_where(after)
-        return [nil, []] unless after
-
-        params = []
-        [@dialect.after_clause(params, after), params]
-      end
-
-      def item_clause(item, params, after)
+      def item_clause(item, params, after, before)
         parts = []
         parts << @dialect.type_in(params, item.event_types) unless item.event_types.empty?
-        parts << @dialect.tags_contain(params, item.tags, after: after) unless item.tags.empty?
+        parts << @dialect.tags_contain(params, item.tags, after: after, before: before) unless item.tags.empty?
 
         "(#{parts.join(' AND ')})"
       end

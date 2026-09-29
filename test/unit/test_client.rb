@@ -13,8 +13,8 @@ class TestClient < Minitest::Test
       events
     end
 
-    def read(query) = [:read, query]
-    def read_from(query, after:) = [:read_from, query, after]
+    def read(query, **options) = [:read, query, options].reject { _1 == {} }
+    def read_from(query, **options) = [:read_from, query, options]
   end
 
   def test_stamps_correlation_and_causation_ids
@@ -100,7 +100,13 @@ class TestClient < Minitest::Test
   def test_delegates_read_from
     store = FakeStore.new
     ctx = DcbEventStore::Client.new(store)
-    assert_equal [:read_from, :q, 5], ctx.read_from(:q, after: 5)
+    assert_equal [:read_from, :q, {after: 5}], ctx.read_from(:q, after: 5)
+  end
+
+  def test_passes_read_options_through
+    ctx = DcbEventStore::Client.new(FakeStore.new)
+    assert_equal [:read, :q, {backwards: true, limit: 1}], ctx.read(:q, backwards: true, limit: 1)
+    assert_equal [:read_from, :q, {before: 3, backwards: true}], ctx.read_from(:q, before: 3, backwards: true)
   end
 
   def test_passes_condition_through

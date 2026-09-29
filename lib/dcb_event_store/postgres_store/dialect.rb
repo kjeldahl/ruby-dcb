@@ -34,11 +34,11 @@ module DcbEventStore
         "type = ANY(#{placeholder(params.size)}::text[])"
       end
 
-      # Matches events carrying all of +tags+. +after+ is accepted for
-      # interface parity with the SQLite dialect and not needed here: the GIN
-      # lookup is by tag and the position bound is applied by the outer
-      # clause.
-      def tags_contain(params, tags, after: nil) # rubocop:disable Lint/UnusedMethodArgument
+      # Matches events carrying all of +tags+. +after+ and +before+ are
+      # accepted for interface parity with the SQLite dialect and not needed
+      # here: the GIN lookup is by tag and the position bounds are applied by
+      # the outer clause.
+      def tags_contain(params, tags, after: nil, before: nil) # rubocop:disable Lint/UnusedMethodArgument
         params << encode_list(tags)
         "tags @> #{placeholder(params.size)}::text[]"
       end
@@ -47,6 +47,12 @@ module DcbEventStore
       def after_clause(params, after)
         params << after
         "sequence_position > #{placeholder(params.size)}"
+      end
+
+      # Matches events stored before sequence position +before+.
+      def before_clause(params, before)
+        params << before
+        "sequence_position < #{placeholder(params.size)}"
       end
 
       # One "(...)" row fragment for a multi-row INSERT ... VALUES, appending

@@ -15,8 +15,8 @@ module DcbEventStore
       @store.append(events, condition)
     end
 
-    def read(query) = @store.read(query)
-    def read_from(query, after:) = @store.read_from(query, after: after)
+    def read(query, **) = @store.read(query, **)
+    def read_from(query, **) = @store.read_from(query, **)
     def last_position = @store.last_position
 
     def caused_by(event)

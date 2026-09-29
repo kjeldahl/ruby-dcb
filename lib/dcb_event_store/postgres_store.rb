@@ -47,9 +47,9 @@ module DcbEventStore
 
     private
 
-    def fetch_batch(query, after:, limit:)
-      sql, params = @sql.read_sql(query, after: after)
-      @conn.exec_params("#{sql} LIMIT #{limit}", params).to_a
+    def fetch_batch(query, **page)
+      sql, params = @sql.read_sql(query, **page)
+      @conn.exec_params(sql, params).to_a
     end
 
     def max_position

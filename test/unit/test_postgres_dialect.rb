@@ -60,6 +60,26 @@ class TestPostgresDialect < Minitest::Test
     assert_equal ["{t1}"], params
   end
 
+  def test_tags_contain_ignores_before
+    params = []
+    assert_equal "tags @> $1::text[]", @dialect.tags_contain(params, ["t1"], before: 7)
+    assert_equal ["{t1}"], params
+  end
+
+  # --- before_clause ---
+
+  def test_before_clause_binds_the_position
+    params = []
+    assert_equal "sequence_position < $1", @dialect.before_clause(params, 7)
+    assert_equal [7], params
+  end
+
+  def test_before_clause_numbers_off_the_params_already_collected
+    params = %w[x y]
+    assert_equal "sequence_position < $3", @dialect.before_clause(params, 7)
+    assert_equal ["x", "y", 7], params
+  end
+
   # --- after_clause ---
 
   def test_after_clause_binds_the_position

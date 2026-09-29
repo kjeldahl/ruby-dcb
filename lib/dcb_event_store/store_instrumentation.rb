@@ -86,12 +86,16 @@ module DcbEventStore
       end
     end
 
-    def instrument_read(events, query, after)
+    # The payload carries the read's ReadOptions: after:, and before:,
+    # backwards: and limit: when set (nil otherwise, so a plain forward read
+    # logs as it always has).
+    def instrument_read(events, query, options)
       instrumentation = DcbEventStore.instrumentation
       return events unless instrumentation.listening?(READ_EVENT)
 
       Enumerator.new do |yielder|
-        payload = store_identity.merge(query: query, after: after)
+        payload = store_identity.merge(query: query, after: options.after, before: options.before,
+                                       backwards: (true if options.backwards), limit: options.limit)
         instrumentation.instrument(READ_EVENT, payload) do |inner|
           inner[:event_count] = 0
           events.each do |event|

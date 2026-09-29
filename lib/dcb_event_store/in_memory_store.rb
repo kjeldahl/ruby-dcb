@@ -28,12 +28,14 @@ module DcbEventStore
       @listeners = []
     end
 
-    def read(query)
-      instrument_read(each_matching(query, after: nil), query, nil)
+    # Same contract as SqlStore#read.
+    def read(query, backwards: false, limit: nil)
+      read_with(query, ReadOptions.new(backwards: backwards, limit: limit))
     end
 
-    def read_from(query, after:)
-      instrument_read(each_matching(query, after: after), query, after)
+    # Same contract as SqlStore#read_from.
+    def read_from(query, after: nil, before: nil, backwards: false, limit: nil)
+      read_with(query, ReadOptions.new(after: after, before: before, backwards: backwards, limit: limit))
     end
 
     # The sequence position of the last stored event, nil on an empty store.
@@ -78,17 +80,46 @@ module DcbEventStore
 
     private
 
-    def each_matching(query, after:)
+    def read_with(query, options)
+      instrument_read(each_matching(query, options), query, options)
+    end
+
+    def each_matching(query, options)
       Enumerator.new do |yielder|
-        index = 0
-        while index < @rows.length
-          row = @rows.fetch(index)
-          index += 1
-          next if after && row.fetch(:sequence_position) <= after
+        yielded = 0
+        each_row(options) do |row|
           next unless matches?(query, row)
 
           yielder << row_to_sequenced_event(row)
+          yielded += 1
+          break if yielded == options.limit
         end
+      end
+    end
+
+    # The rows within the read's bound, in its direction. Walked by index
+    # rather than with #each: a forward read also sees rows appended while
+    # it runs (a subscriber appending from its block), as a SQL store's next
+    # page would.
+    def each_row(options, &)
+      options.backwards ? each_row_backwards(options.before, &) : each_row_forwards(options.after, &)
+    end
+
+    def each_row_forwards(after)
+      index = 0
+      while index < @rows.length
+        row = @rows.fetch(index)
+        index += 1
+        yield row unless after && row.fetch(:sequence_position) <= after
+      end
+    end
+
+    def each_row_backwards(before)
+      index = @rows.length
+      while index.positive?
+        index -= 1
+        row = @rows.fetch(index)
+        yield row unless before && row.fetch(:sequence_position) >= before
       end
     end
 

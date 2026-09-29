@@ -30,7 +30,7 @@ class TestSqlStore < Minitest::Test
   end
 
   class FakeSqlStore < DcbEventStore::SqlStore
-    attr_reader :rows, :notified, :lock_conditions, :import_locks
+    attr_reader :rows, :notified, :lock_conditions, :import_locks, :fetched_limits
     attr_accessor :matching_count
 
     def initialize(**)
@@ -41,6 +41,7 @@ class TestSqlStore < Minitest::Test
       @lock_conditions = []
       @matching_count = 0
       @import_locks = 0
+      @fetched_limits = []
     end
 
     private
@@ -84,8 +85,11 @@ class TestSqlStore < Minitest::Test
       row
     end
 
-    def fetch_batch(_query, after:, limit:)
-      @rows.drop(after.to_i).first(limit)
+    def fetch_batch(_query, after:, before:, order:, limit:)
+      @fetched_limits << limit
+      return @rows.drop(after.to_i).first(limit) if order == :asc
+
+      @rows.take(before ? before - 1 : @rows.size).reverse.first(limit)
     end
 
     def notify_appended(position)
@@ -116,7 +120,7 @@ class TestSqlStore < Minitest::Test
     refute_implemented(:insert_event, event)
     refute_implemented(:lock_for_import!)
     refute_implemented(:import_event, event)
-    refute_implemented(:fetch_batch, DcbEventStore::Query.all, after: nil, limit: 10)
+    refute_implemented(:fetch_batch, DcbEventStore::Query.all, after: nil, before: nil, order: :asc, limit: 10)
     refute_implemented(:notify_appended, 1)
     refute_implemented(:listen)
     refute_implemented(:unlisten)
@@ -256,6 +260,47 @@ class TestSqlStore < Minitest::Test
     read_back = store.read(DcbEventStore::Query.all).first
     assert_equal({x: 1, upgraded: true}, read_back.data)
     assert_equal 2, read_back.schema_version
+  end
+
+  def test_limit_goes_into_the_fetch
+    @store.append([event(type: "A"), event(type: "B")])
+
+    assert_equal %w[A], @store.read(DcbEventStore::Query.all, limit: 1).map(&:type)
+    assert_equal [1], @store.fetched_limits
+  end
+
+  def test_backwards_read_passes_direction_and_bound_to_the_fetch
+    @store.append([event(type: "A"), event(type: "B"), event(type: "C")])
+
+    assert_equal %w[C B A], @store.read(DcbEventStore::Query.all, backwards: true).map(&:type)
+    assert_equal %w[B A], @store.read_from(DcbEventStore::Query.all, before: 3, backwards: true).map(&:type)
+  end
+
+  # A limit that ends exactly on a page boundary is used up there: no
+  # further fetch for rows the read would not yield.
+  def test_limit_on_a_page_boundary_stops_without_another_fetch
+    batch = DcbEventStore::SqlStore::BATCH_SIZE
+    @store.append(Array.new(batch + 1) { event(type: "A") })
+
+    assert_equal batch, @store.read(DcbEventStore::Query.all, limit: batch).count
+    assert_equal [batch], @store.fetched_limits
+  end
+
+  def test_limit_past_a_page_asks_the_next_page_for_the_rest_only
+    batch = DcbEventStore::SqlStore::BATCH_SIZE
+    @store.append(Array.new(batch + 5) { event(type: "A") })
+
+    read_back = @store.read(DcbEventStore::Query.all, limit: batch + 2).map(&:sequence_position)
+    assert_equal (1..(batch + 2)).to_a, read_back
+    assert_equal [batch, 2], @store.fetched_limits
+  end
+
+  def test_backwards_pages_continue_before_the_last_row
+    batch = DcbEventStore::SqlStore::BATCH_SIZE
+    @store.append(Array.new(batch + 1) { event(type: "A") })
+
+    read_back = @store.read(DcbEventStore::Query.all, backwards: true).map(&:sequence_position)
+    assert_equal (1..(batch + 1)).to_a.reverse, read_back
   end
 
   # Paging stops only when a batch comes back short, so a stream that is an

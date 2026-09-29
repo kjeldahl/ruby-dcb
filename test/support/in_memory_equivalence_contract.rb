@@ -57,14 +57,24 @@ module InMemoryEquivalenceContract
                                  ])
       ).to_a
       from_position = store.read_from(DcbEventStore::Query.all, after: appended[0].sequence_position).to_a
+      backwards = store.read(DcbEventStore::Query.all, backwards: true).to_a
+      latest_student = store.read(
+        DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["student:s1"])]),
+        backwards: true, limit: 1
+      ).to_a
+      before_last = store.read_from(DcbEventStore::Query.all, before: appended.last.sequence_position,
+                                                              backwards: true, limit: 1).to_a
 
-      {
-        appended: appended.map { |e| comparable(e) },
-        all: store.read(DcbEventStore::Query.all).to_a.map { |e| comparable(e) },
-        filtered: filtered.map { |e| comparable(e) },
-        from_position: from_position.map { |e| comparable(e) },
-        failure_class: failure.class
+      reads = {
+        appended: appended,
+        all: store.read(DcbEventStore::Query.all).to_a,
+        filtered: filtered,
+        from_position: from_position,
+        backwards: backwards,
+        latest_student: latest_student,
+        before_last: before_last
       }
+      reads.transform_values { |events| events.map { |e| comparable(e) } }.merge(failure_class: failure.class)
     end
 
     assert_equal script.call(memory_store), script.call(backend_store)
