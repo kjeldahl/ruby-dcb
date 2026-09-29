@@ -19,6 +19,13 @@ module DcbEventStore
     def read_from(query, **) = @store.read_from(query, **)
     def last_position = @store.last_position
 
+    # DecisionModel.decide on this client's store, with the events the block
+    # returns stamped like #append's.
+    def decide(**, &decision)
+      stamping = decision && ->(states) { Array(decision.call(states)).map { |event| stamp(event) } }
+      DecisionModel.decide(@store, **, &stamping)
+    end
+
     def caused_by(event)
       Client.new(
         @store,

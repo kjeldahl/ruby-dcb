@@ -15,6 +15,7 @@ requires:
   - ./test/unit/test_read_options
   - ./test/unit/test_projection
   - ./test/unit/test_decision_model
+  - ./test/unit/test_decide
   - ./test/unit/test_upcaster
   - ./test/unit/test_client
   - ./test/unit/test_in_memory_store

@@ -118,29 +118,27 @@ module CourseSubscriptions
     )
   end
 
+  # Client#decide runs the build/decide/append loop and, should another
+  # writer get in between (ConditionNotMet), decides again on fresh state.
   def self.subscribe_student(client, student_id:, course_id:)
-    result = DcbEventStore::DecisionModel.build(client,
+    client.decide(
       course_exists:       course_exists(course_id),
       capacity:            course_capacity(course_id),
       course_subscriptions: course_subscription_count(course_id),
       student_subscriptions: student_subscription_count(student_id),
       already_subscribed:  student_already_subscribed(student_id, course_id)
-    )
+    ) do |states|
+      raise "Course #{course_id} does not exist"                          unless states[:course_exists]
+      raise "Student #{student_id} already subscribed to #{course_id}"    if states[:already_subscribed]
+      raise "Course #{course_id} is full (#{states[:capacity]} seats)"    if states[:course_subscriptions] >= states[:capacity]
+      raise "Student #{student_id} already enrolled in #{MAX_STUDENT_COURSES} courses" if states[:student_subscriptions] >= MAX_STUDENT_COURSES
 
-    states = result.states
-    raise "Course #{course_id} does not exist"                          unless states[:course_exists]
-    raise "Student #{student_id} already subscribed to #{course_id}"    if states[:already_subscribed]
-    raise "Course #{course_id} is full (#{states[:capacity]} seats)"    if states[:course_subscriptions] >= states[:capacity]
-    raise "Student #{student_id} already enrolled in #{MAX_STUDENT_COURSES} courses" if states[:student_subscriptions] >= MAX_STUDENT_COURSES
-
-    client.append(
       DcbEventStore::Event.new(
         type: "StudentSubscribedToCourse",
         data: { student_id: student_id, course_id: course_id },
         tags: ["student:#{student_id}", "course:#{course_id}"]
-      ),
-      result.append_condition
-    )
+      )
+    end
   end
 
   # -- Demo ------------------------------------------------------------------

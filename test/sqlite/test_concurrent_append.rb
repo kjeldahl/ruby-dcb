@@ -1,5 +1,6 @@
 require_relative "../test_helper"
 require_relative "../support/sqlite_database"
+require_relative "../support/concurrent_decide_contract"
 require "concurrent"
 
 # Concurrent appends against SQLite, the SQLite counterpart of
@@ -18,6 +19,7 @@ class TestSqliteConcurrentAppend < Minitest::Test
   cover "DcbEventStore::SqliteStore*"
 
   include SqliteDatabaseHelper
+  include ConcurrentDecideContract
 
   def setup
     setup_db
@@ -86,6 +88,13 @@ class TestSqliteConcurrentAppend < Minitest::Test
   end
 
   private
+
+  def with_own_store
+    db = SqliteDatabaseHelper.connection(@db_path)
+    yield DcbEventStore::SqliteStore.new(db)
+  ensure
+    db&.close
+  end
 
   # Runs the block on `n` threads, each with its own store on its own
   # connection, released together by a barrier. Returns one :success or

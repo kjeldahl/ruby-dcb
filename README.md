@@ -196,6 +196,25 @@ result.states[:subscriptions]  # => 12
 result.append_condition        # use this when appending
 ```
 
+**Deciding with retries.** The write loop is always the same: build, decide on the states, append under the model's condition, and if another writer got in between (`ConditionNotMet`) start over from a fresh build. `DecisionModel.decide` runs it:
+
+```ruby
+DcbEventStore::DecisionModel.decide(store, snapshots: snapshots, # optional, as for build
+                                    capacity: capacity_projection,
+                                    subscriptions: subscription_count_projection) do |states|
+  raise CourseFull if states[:subscriptions] >= states[:capacity]
+
+  [DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["course:math-101", "student:s1"])]
+end
+# => the appended SequencedEvents
+```
+
+- The block gets `states` (as in `build`) and returns an `Event`, an Array of them, or `[]`/`nil` to append nothing (`decide` then returns `[]`). It runs once per attempt, so keep it free of side effects.
+- Only the append's `ConditionNotMet` is retried, `retries:` times (default `3`, so up to 4 builds); after that the last one is re-raised. Anything else, including errors the block raises, propagates at once.
+- Between attempts it sleeps `backoff:` seconds: a Range (default `0.01..0.2`, a random delay in it, so writers that collided spread out), a fixed number, a callable taking the failed attempt number (`->(n) { 0.01 * 2**n }`), or `nil`/`0` for none. `sleeper:` does the sleeping (default `Kernel#sleep`; a test seam).
+- `snapshots:`, `retries:`, `backoff:` and `sleeper:` cannot be projection names.
+- `Client#decide` takes the same arguments and stamps the events like `Client#append`.
+
 ### Snapshots
 
 A decision model re-reads and re-folds every matching event on every build, so its cost grows with the length of the projection's history — a "popular course" with 10,000 subscriptions costs ~400ms per decision on either backend, nearly all of it row decoding. Snapshots cap that: a projection's folded state is stored at a sequence position, and the next build reads only the events after it (2–5ms for the same decision; measurements and design notes in `examples/SNAPSHOTS.md`). A projection opts in with a `Snapshot`, and `DecisionModel.build` takes the store to keep them in:
@@ -240,6 +259,7 @@ client.correlation_id  # => auto-generated UUID
 
 # Events appended through client get stamped automatically
 client.append(event, condition)
+client.decide(**projections) { |states| event }   # DecisionModel.decide, stamped
 
 # Chain causation across command handlers
 next_client = client.caused_by(triggering_event)
@@ -303,7 +323,8 @@ Emitted events and payloads:
 | `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `namespace:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
 | `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `namespace:`, `query:`, `after:`, `before:`, `backwards:`, `limit:` (nil unless set), `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
-| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
+| `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `attempt:` (1, 2, ... when run by `decide`), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
+| `decide.dcb` | `DecisionModel.decide`, `Client#decide` | `projections:` (names), `attempts:` (builds run; also set when it raised), `appended_count:` on success (0 when the block returned nothing) |
 | `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `namespace:`, `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |
 | `subscribe.dcb` | `SqlStore#subscribe`, `InMemoryStore#subscribe` | per event: `store:`, `namespace:`, `query:`, `phase:` (`:catch_up`/`:live`), `sequence_position:`, `lag:` — batched: `store:`, `namespace:`, `query:`, `phase:`, `event_count:`, `last_position:`, `max_lag:` |
 | `namespace_collision.dcb` | `Namespace.new`, when a new name's advisory-lock offset is one another name already holds (their appends serialize against each other; correctness is unaffected) | `namespace:`, `shares_with:` (the names already on that offset), `lock_offset:` |
@@ -429,13 +450,14 @@ DcbEventStore::AppsignalSubscriber.new.attach_to
 
 | Metric | Type | Meaning |
 |--------|------|---------|
-| `dcb.<operation>.duration` | distribution (ms) | every operation (`append`, `read`, `subscribe`, `projection`, `decision_model`) |
+| `dcb.<operation>.duration` | distribution (ms) | every operation (`append`, `read`, `subscribe`, `projection`, `decision_model`, `decide`) |
 | `dcb.<operation>.errors` | counter | operations that raised |
 | `dcb.append.events` | counter | events actually written (post-dedup) |
 | `dcb.append.conflicts` | counter | `ConditionNotMet` failures — the consistency-boundary conflict rate |
 | `dcb.subscribe.delivered` | counter | events delivered to subscribers, tagged `phase=live/catch_up` |
 | `dcb.subscribe.lag` | distribution (ms) | live delivery lag — the staleness signal; alert on its p95/p99 |
 | `dcb.decision_model.events` | distribution | events read per build — flat when snapshots work, growing when they do not |
+| `dcb.decide.retries` | counter | builds `decide` repeated after a `ConditionNotMet` (counted when it ran out of retries too) — contention on a decision |
 | `dcb.snapshot.hits` / `dcb.snapshot.misses` | counter | snapshots found / missing on load (hit rate) |
 | `dcb.snapshot.writes` | counter | snapshots written |
 | `dcb.snapshot.folded` | distribution | events folded on top of a snapshot before it was rewritten (tune `every:`) |

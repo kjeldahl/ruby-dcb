@@ -273,6 +273,32 @@ class TestAppsignalSubscriber < Minitest::Test
     assert_equal 0, @appsignal.distributions.last[1]
   end
 
+  def test_decide_counts_retries
+    @subscriber.call(build_event(name: "decide.dcb", payload: {projections: [:a], attempts: 3, appended_count: 1}))
+
+    assert_equal [["dcb.decide.retries", 2, {}]], @appsignal.counters
+  end
+
+  def test_decide_on_first_attempt_counts_no_retries
+    @subscriber.call(build_event(name: "decide.dcb", payload: {projections: [:a], attempts: 1, appended_count: 1}))
+
+    assert_empty @appsignal.counters
+  end
+
+  # Out of retries: the error and the retries it took are both counted.
+  def test_failed_decide_still_counts_its_retries
+    @subscriber.call(build_event(name: "decide.dcb", error: DcbEventStore::ConditionNotMet.new("x"),
+                                 payload: {projections: [:a], attempts: 4}))
+
+    assert_equal [["dcb.decide.errors", 1, {}], ["dcb.decide.retries", 3, {}]], @appsignal.counters
+  end
+
+  def test_decide_without_attempts_counts_no_retries
+    @subscriber.call(build_event(name: "decide.dcb", error: IOError.new("down"), payload: {projections: [:a]}))
+
+    assert_equal ["dcb.decide.errors"], @appsignal.counters.map(&:first)
+  end
+
   def test_snapshot_load_counts_hits_and_misses
     @subscriber.call(build_event(name: "snapshot.dcb",
                                  payload: {store: "DcbEventStore::Snapshots::PostgresSnapshotStore",
