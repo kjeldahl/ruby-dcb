@@ -130,46 +130,67 @@ module DcbEventStore
     end
 
     # The positions matching +query+ within the read's bound, in its
-    # direction. A forward read asks again past the last position it
-    # yielded until nothing is left, so it also sees rows appended while it
-    # runs (a subscriber appending from its block), as a SQL store's next
-    # page would.
+    # direction. A forward read asks again past the rows it searched when
+    # more were appended while it ran (a subscriber appending from its
+    # block), as a SQL store's next page would see them.
     def each_position(query, options, &)
-      return matching_positions(query, nil, options.before).reverse_each(&) if options.backwards
+      limit = options.limit
+      if options.backwards
+        return matching_positions(query, nil, options.before, limit: limit, backwards: true).reverse_each(&)
+      end
 
       after = options.after
       loop do
-        positions = matching_positions(query, after, nil)
-        break if positions.none?
+        searched = @rows.length
+        matching_positions(query, after, nil, limit: limit).each(&)
+        break if @rows.length == searched
 
-        positions.each(&)
-        after = positions.last
+        # Rows were appended from the block, so this search yielded a row
+        # past +after+: everything up to +searched+ is done.
+        after = searched
       end
     end
 
     # Ascending positions matching +query+, strictly between +after+ and
-    # +before+ (either nil for no bound): a Range for Query.all, so an
-    # unfiltered read with a limit does not list the whole log.
-    def matching_positions(query, after, before)
-      first = after ? after + 1 : 1
-      last = before ? before - 1 : @rows.length
+    # +before+ (either nil for no bound). With a +limit+ each list gives up
+    # at most that many from the read's end, enough for the read to stop
+    # after +limit+ events. A Range for Query.all, so an unfiltered read
+    # with a limit does not list the whole log.
+    def matching_positions(query, after, before, limit: nil, backwards: false)
+      first = after ? [after + 1, 1].max : 1
+      last = before ? [before - 1, @rows.length].min : @rows.length
       return first..last if query.match_all?
 
-      positions = query.items.flat_map { |item| item_positions(item, after, before) }
+      positions = query.items.flat_map do |item|
+        candidate_lists(item).flat_map do |list|
+          matching_in(item, between(list, after, before), limit, backwards)
+        end
+      end
       positions.sort!
       positions.uniq!
       positions
     end
 
-    # Positions matching +item+: the shortest list that holds all of them
-    # (one of its tags', or its types' together), narrowed to the bound and
-    # checked against the rest of the item.
-    def item_positions(item, after, before)
-      candidates = item.tags.map { |tag| [@positions_by_tag.fetch(tag, EMPTY)] }
-      candidates << item.event_types.map { |type| @positions_by_type.fetch(type, EMPTY) } unless item.event_types.empty?
-      lists = candidates.min_by { |candidate| candidate.sum(&:length) }
-      lists.flat_map { |list| between(list, after, before) }
-           .select { |position| item_matches?(item, row_at(position)) }
+    # The positions of +slice+ that match +item+: all of them, or the first
+    # +limit+ from the read's end.
+    def matching_in(item, slice, limit, backwards)
+      return slice.select { |position| item_matches?(item, row_at(position)) } unless limit
+
+      walk = backwards ? slice.reverse_each : slice
+      walk.lazy.select { |position| item_matches?(item, row_at(position)) }.first(limit)
+    end
+
+    # The lists that between them hold every position matching +item+,
+    # the fewest positions to check: its shortest tag list, or all its type
+    # lists together when they are shorter still (a tie goes to the tag
+    # list: one list, nothing to merge).
+    def candidate_lists(item)
+      tag_list = item.tags.map { |tag| @positions_by_tag.fetch(tag, EMPTY) }.min_by(&:length)
+      type_lists = item.event_types.map { |type| @positions_by_type.fetch(type, EMPTY) }
+      return type_lists unless tag_list
+      return [tag_list] if type_lists.empty? || tag_list.length <= type_lists.sum(&:length)
+
+      type_lists
     end
 
     # The slice of the ascending +list+ strictly between +after+ and +before+
@@ -266,7 +287,15 @@ module DcbEventStore
     end
 
     def conflicting_events?(condition)
-      matching_positions(condition.fail_if_events_match, condition.after, nil).any?
+      query = condition.fail_if_events_match
+      after = condition.after
+      return matching_positions(query, after, nil).any? if query.match_all?
+
+      query.items.any? do |item|
+        candidate_lists(item).any? do |list|
+          between(list, after, nil).any? { |position| item_matches?(item, row_at(position)) }
+        end
+      end
     end
 
     def deliver(listener, phase)

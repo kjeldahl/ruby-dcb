@@ -147,17 +147,77 @@ class TestInMemoryStore < Minitest::Test
     assert_equal [3, 1], positions(@store.read_from(query(tags: %w[t]), before: 4, backwards: true))
   end
 
-  # A read costs what it matches: one row visited to check the item, one to
-  # build the event, whichever list (type or tag) is the short one.
+  # A read costs what it matches: only the rows of the short list (type or
+  # tag) are visited.
   def test_a_read_visits_only_the_rows_of_the_shortest_list
     50.times { append_events(%w[Common shared]) }
     append_events(%w[Rare shared], %w[Common shared rare])
 
     rare_type = visited_rows { @store.read(query(types: %w[Rare], tags: %w[shared])).to_a }
     rare_tag = visited_rows { @store.read(query(types: %w[Common], tags: %w[shared rare])).to_a }
+    rare_tag_first = visited_rows { @store.read(query(types: %w[Common], tags: %w[rare shared])).to_a }
 
-    assert_equal [51, 51], rare_type
-    assert_equal [52, 52], rare_tag
+    assert_equal [51], rare_type
+    assert_equal [52], rare_tag
+    assert_equal [52], rare_tag_first
+  end
+
+  # Type list [1] and tag list [2] are the same length: the tag list is read.
+  def test_a_tie_between_type_and_tag_lists_reads_the_tag_list
+    append_events(%w[A], %w[B t])
+
+    visited = visited_rows { @store.read(query(types: %w[A], tags: %w[t])).to_a }
+
+    assert_equal [2], visited
+  end
+
+  # t = [4, 5] is shorter than A = [1, 2, 3, 5]; position 4 is a B and must
+  # not count toward the limit.
+  def test_a_limited_read_skips_candidates_the_item_does_not_match
+    append_events(%w[A], %w[A], %w[A], %w[B t], %w[A t])
+
+    assert_equal [5], positions(@store.read(query(types: %w[A], tags: %w[t]), limit: 1))
+  end
+
+  # Nothing of type A was ever stored; a B still conflicts.
+  def test_a_condition_on_several_types_conflicts_on_any_of_them
+    append_events(%w[B])
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query(types: %w[A B]))
+
+    assert_raises(DcbEventStore::ConditionNotMet) { @store.append(DcbEventStore::Event.new(type: "C"), condition) }
+  end
+
+  # A limited read stops at the limit from its end, in either direction.
+  def test_a_limited_read_visits_only_the_rows_it_returns
+    5.times { append_events(%w[A t]) }
+
+    forwards = visited_rows { assert_equal [1, 2], positions(@store.read(query(tags: %w[t]), limit: 2)) }
+    backwards = visited_rows { assert_equal [5], positions(@store.read(query(tags: %w[t]), backwards: true, limit: 1)) }
+
+    assert_equal [1, 2], forwards
+    assert_equal [5], backwards
+  end
+
+  # The condition check stops at the first conflicting event.
+  def test_a_condition_check_stops_at_the_first_conflict
+    5.times { append_events(%w[A t]) }
+    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query(tags: %w[t]), after: 2)
+
+    visited = visited_rows do
+      assert_raises(DcbEventStore::ConditionNotMet) { @store.append(DcbEventStore::Event.new(type: "A"), condition) }
+    end
+
+    assert_equal [3], visited
+  end
+
+  # Bounds past either end of the log clamp to it, as on the SQL stores.
+  def test_query_all_bounds_past_either_end_of_the_log
+    append_events(%w[A], %w[B])
+    all = DcbEventStore::Query.all
+
+    assert_equal [2, 1], positions(@store.read_from(all, before: 10, backwards: true))
+    assert_equal [1, 2], positions(@store.read_from(all, after: -1))
+    assert_equal [1, 2], positions(@store.read_from(all, after: -3))
   end
 
   # A subscriber appending from its block sees its own event in the same
@@ -192,6 +252,8 @@ class TestInMemoryStore < Minitest::Test
     events.map(&:sequence_position)
   end
 
+  # Distinct rows the store looked at while the block ran, through its
+  # private row lookup.
   def visited_rows
     visited = []
     @store.define_singleton_method(:row_at) do |position|
@@ -199,6 +261,6 @@ class TestInMemoryStore < Minitest::Test
       super(position)
     end
     yield
-    visited
+    visited.uniq
   end
 end
