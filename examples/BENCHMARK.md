@@ -280,3 +280,53 @@ Three ways to read one column, two orders of magnitude apart:
 - **`Time.parse`.** Correct for anything, and the cost of that generality is
   trying dozens of formats before recognising either of ours. Still the fallback
   for a timestamp outside the recognised shape, so nothing stops being readable.
+
+## dcb.events k6 suite (#50)
+
+The [dcb.events k6 suite](https://github.com/dcb-events/dcb-events.github.io/tree/main/libraries/benchmark)
+is shared across DCB implementations, so this is the one table here that other
+stores publish too. `bench/k6/server.rb` speaks its default HTTP protocol over
+the public store API; `bench/k6/run.sh` runs each test against a fresh, empty
+store (suite pinned at `6a47fc5`):
+
+- **consistency** — 20 VUs append for 10s, each conditioned on the last event
+  its random query matched; then every batch is checked against the stream.
+- **monotonic** — 5 VUs append while one reads positions; they must only grow.
+- **parallel-writes** — 20 VUs append unrelated events (a unique tag each, the
+  condition on that tag); none may be rejected.
+
+4 vCPU Xeon container, PostgreSQL 16, Ruby 3.3, k6 1.8 on the same host.
+Server: Puma, 4 workers x 16 threads, one connection per thread.
+
+| backend | test | appends | appends/s | append p50 ms | append p95 ms | conflicts | checks passed |
+|---|---|---|---|---|---|---|---|
+| postgres | consistency | 3444 | 273 | 49.63 | 72.50 | 71.8% | 676/676 |
+| postgres | monotonic | 1803 | 179 | 13.81 | 31.35 | 62.5% | 373/373 |
+| postgres | parallel-writes | 8976 | 896 | 18.23 | 36.07 | 0.0% | - |
+| sqlite | consistency | 4452 | 304 | 0.45 | 11.59 | 60.7% | 667/667 |
+| sqlite | monotonic | 2042 | 203 | 0.56 | 4.15 | 51.2% | 136/136 |
+| sqlite | parallel-writes | 16113 | 1608 | 5.50 | 33.85 | 0.0% | - |
+
+Both backends pass every check, and no unrelated append is rejected. Against a
+store patched to skip the condition check the consistency test fails
+(512 of 669 checks), so the checks do bite.
+
+- **Append latency is measured in the server** around `store.append`
+  (`durationInMicroseconds`), so it includes waiting for locks and, under
+  load, for the GVL, but not HTTP. `appends/s` is what k6 got through end to
+  end, which the suite's reads also slow down.
+- **Conflicts are the suite's workload, not failures**, in consistency and
+  monotonic: 5-10 types and tags with random queries, so most appends race on
+  something (a query with no items matches everything).
+- **PostgreSQL consistency** is the slowest row because conditions naming no
+  tag take the global lock exclusively (see "Per-tag locks" above), and the
+  random queries often name no tag.
+- **One process capped PostgreSQL at ~500 appends/s** on parallel-writes with
+  fsync on or off: the Ruby process, holding the GVL for request parsing, JSON
+  and row mapping, was the bottleneck, not the database. Forking one worker per
+  core roughly doubled it, hence `PUMA_WORKERS` defaulting to the core count.
+  For SQLite the extra processes contend for the single write lock, which
+  shows as the higher p50 on parallel-writes (0.38 ms single-process).
+- **Backwards reads scan.** The store reads forwards only, so the suite's
+  "last matching event" read (`backwards`, `limit: 1`) walks the matching
+  stream. That costs throughput as the log grows, not append latency.

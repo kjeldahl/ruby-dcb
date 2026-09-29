@@ -475,6 +475,18 @@ DCB_BACKEND=sqlite bundle exec ruby examples/performance.rb 20000 100
 
 See `examples/BENCHMARK.md` for performance findings.
 
+### dcb.events k6 suite
+
+`bench/k6/` runs the [dcb.events k6 conformance/benchmark suite](https://github.com/dcb-events/dcb-events.github.io/tree/main/libraries/benchmark) (consistency, monotonic positions, error rate of unrelated parallel appends) against PostgreSQL and SQLite, through a small Puma adapter that is not part of the gem:
+
+```bash
+bundle config set --local with bench && bundle install   # adds puma
+bench/k6/run.sh                                  # needs k6; redis for the monotonic test
+BACKENDS=sqlite TESTS=consistency bench/k6/run.sh
+```
+
+It prints a results table and fails if any check does. Results are in `examples/BENCHMARK.md`; the `k6` workflow runs it on demand in CI.
+
 ## Upgrading
 
 The PostgreSQL store used to be the only one, and carried the unqualified names. They still resolve, as deprecated aliases:

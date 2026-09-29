@@ -1,0 +1,49 @@
+name: k6 suite
+
+# The dcb.events k6 conformance/benchmark suite (bench/k6), on demand only:
+# it runs for a minute or more and numbers from a shared runner are noisy.
+on:
+  workflow_dispatch:
+    inputs:
+      backends:
+        description: "Backends (space-separated)"
+        default: "postgres sqlite"
+      tests:
+        description: "Tests (space-separated)"
+        default: "consistency monotonic parallel-writes"
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      BUNDLE_WITH: bench
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb dcb_event_store_test
+      # The monotonic test keeps its observations in redis.
+      - name: Install redis
+        run: sudo apt-get update && sudo apt-get install -y redis-server
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - uses: grafana/setup-k6-action@v1
+      - name: Run suite
+        env:
+          BACKENDS: ${{ inputs.backends }}
+          TESTS: ${{ inputs.tests }}
+        run: bench/k6/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: k6-results-${{ github.sha }}
+          path: bench/k6/results/
+          retention-days: 30
