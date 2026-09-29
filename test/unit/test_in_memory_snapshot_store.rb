@@ -30,6 +30,24 @@ class TestInMemorySnapshotStore < Minitest::Test
     assert_raises(ArgumentError) { DcbEventStore::Snapshots::InMemorySnapshotStore.new(namespace: "Bad Name") }
   end
 
+  # #purge matches the keys of the store's own namespace, the ones
+  # DecisionModel.build writes for that namespace's event store.
+  def test_purge_matches_the_stores_own_namespace
+    snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new(namespace: "billing")
+    query = DcbEventStore::Query.all
+    v1 = DcbEventStore::Snapshot.new(name: "count", version: 1)
+    v2 = DcbEventStore::Snapshot.new(name: "count", version: 2)
+    [v1, v2].each { |snapshot| snapshots.store(snapshot.key(query, namespace: "billing"), position: 1, state: 1) }
+    snapshots.store(v1.key(query), position: 1, state: 1)
+
+    assert_equal 1, snapshots.purge(name: "count", keep_version: 2)
+    assert_nil snapshots.fetch(v1.key(query, namespace: "billing"))
+    refute_nil snapshots.fetch(v2.key(query, namespace: "billing"))
+    refute_nil snapshots.fetch(v1.key(query)), "a key of the default namespace is not this namespace's"
+    assert_equal 1, snapshots.purge(name: "count")
+    refute_nil snapshots.fetch(v1.key(query))
+  end
+
   def test_size_counts_distinct_keys
     @snapshots.store("a", position: 1, state: 1)
     @snapshots.store("a", position: 2, state: 2)
