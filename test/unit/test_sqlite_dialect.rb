@@ -80,12 +80,41 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ['["t1","t2"]', 7, 2], params
   end
 
+  # A backwards read's bound goes into the subquery the same way.
+  def test_tags_contain_with_before_bounds_the_subquery
+    params = []
+    expected = "sequence_position IN (SELECT sequence_position FROM event_tags " \
+               "WHERE tag IN (SELECT value FROM json_each(?)) AND sequence_position < ? " \
+               "GROUP BY sequence_position HAVING COUNT(*) = ?)"
+
+    assert_equal expected, @dialect.tags_contain(params, %w[t1 t2], before: 7)
+    assert_equal ['["t1","t2"]', 7, 2], params
+  end
+
+  def test_tags_contain_with_both_bounds
+    params = []
+    expected = "sequence_position IN (SELECT sequence_position FROM event_tags " \
+               "WHERE tag IN (SELECT value FROM json_each(?)) AND sequence_position > ? AND sequence_position < ? " \
+               "GROUP BY sequence_position HAVING COUNT(*) = ?)"
+
+    assert_equal expected, @dialect.tags_contain(params, ["t1"], after: 3, before: 7)
+    assert_equal ['["t1"]', 3, 7, 1], params
+  end
+
   # The count is compared against the number of distinct tags an event has in
   # the index table, so a repeated tag must not inflate it.
   def test_tags_contain_deduplicates_the_tags
     params = []
     @dialect.tags_contain(params, %w[t1 t1 t2])
     assert_equal ['["t1","t2"]', 2], params
+  end
+
+  # --- before_clause ---
+
+  def test_before_clause_binds_the_position
+    params = ["x"]
+    assert_equal "sequence_position < ?", @dialect.before_clause(params, 7)
+    assert_equal ["x", 7], params
   end
 
   # --- after_clause ---

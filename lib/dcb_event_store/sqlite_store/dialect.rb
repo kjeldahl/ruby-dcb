@@ -55,15 +55,14 @@ module DcbEventStore
       # index table's primary key is (tag, sequence_position), so the scan
       # covers only the tag's rows past that position instead of all of them
       # and filtering afterwards — what keeps a catch-up read after a
-      # snapshot cheap however long the tag's history is.
-      def tags_contain(params, tags, after: nil)
+      # snapshot cheap however long the tag's history is. +before+, a
+      # backwards read's bound, goes in the same way.
+      def tags_contain(params, tags, after: nil, before: nil)
         wanted = tags.uniq
         params << encode_list(wanted)
         conditions = ["tag IN (SELECT value FROM json_each(?))"]
-        if after
-          params << after
-          conditions << "sequence_position > ?"
-        end
+        conditions << after_clause(params, after) if after
+        conditions << before_clause(params, before) if before
         params << wanted.size
         "sequence_position IN (SELECT sequence_position FROM #{@event_tags} " \
           "WHERE #{conditions.join(' AND ')} " \
@@ -74,6 +73,12 @@ module DcbEventStore
       def after_clause(params, after)
         params << after
         "sequence_position > ?"
+      end
+
+      # Matches events stored before sequence position +before+.
+      def before_clause(params, before)
+        params << before
+        "sequence_position < ?"
       end
 
       # Matches events stored at or before sequence position +through+.

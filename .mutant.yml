@@ -12,6 +12,7 @@ requires:
   - ./test/test_helper
   - ./test/unit/test_event
   - ./test/unit/test_query
+  - ./test/unit/test_read_options
   - ./test/unit/test_projection
   - ./test/unit/test_decision_model
   - ./test/unit/test_upcaster
@@ -61,6 +62,7 @@ matcher:
     - DcbEventStore::Query*
     - DcbEventStore::QueryItem*
     - DcbEventStore::AppendCondition*
+    - DcbEventStore::ReadOptions*
     - DcbEventStore::Namespace*
     - DcbEventStore::Projection*
     - DcbEventStore::DecisionModel*

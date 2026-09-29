@@ -46,9 +46,9 @@ module DcbEventStore
 
     private
 
-    def fetch_batch(query, after:, limit:)
-      sql, params = @sql.read_sql(query, after: after)
-      @db.execute("#{sql} LIMIT ?", params + [limit])
+    def fetch_batch(query, **page)
+      sql, params = @sql.read_sql(query, **page)
+      @db.execute(sql, params)
     end
 
     def fetch_by_ids(ids)

@@ -28,12 +28,17 @@ module DcbEventStore
       @namespace = Namespace.wrap(namespace)
     end
 
-    def read(query)
-      instrument_read(paginated_read(query, after: nil), query, nil)
+    # The events matching +query+, oldest first, or newest first with
+    # +backwards+; at most +limit+ of them (see ReadOptions). A lazy
+    # Enumerator: the limit goes into the SQL, so limit: 1 fetches one row.
+    def read(query, backwards: false, limit: nil)
+      read_with(query, ReadOptions.new(backwards: backwards, limit: limit))
     end
 
-    def read_from(query, after:)
-      instrument_read(paginated_read(query, after: after), query, after)
+    # #read from a position: forwards from +after+, or backwards from
+    # +before+ (both exclusive).
+    def read_from(query, after: nil, before: nil, backwards: false, limit: nil)
+      read_with(query, ReadOptions.new(after: after, before: before, backwards: backwards, limit: limit))
     end
 
     # The sequence position of the last stored event, nil on an empty store.
@@ -159,21 +164,24 @@ module DcbEventStore
       end
     end
 
-    # Reads the matching stream lazily, one BATCH_SIZE page at a time, using
-    # keyset pagination on sequence_position so a long stream never has to fit
-    # in memory and a partially consumed enumerator stops fetching.
-    def paginated_read(query, after:)
-      Enumerator.new do |yielder|
-        cursor = after
-        loop do
-          rows = fetch_batch(query, after: cursor, limit: BATCH_SIZE)
-          break if rows.empty?
+    def read_with(query, options)
+      instrument_read(paginated_read(query, options), query, options)
+    end
 
-          rows.each do |row|
-            cursor = row["sequence_position"].to_i
-            yielder << @row_mapper.to_sequenced_event(row)
-          end
-          break if rows.size < BATCH_SIZE
+    # Reads the matching stream lazily, one BATCH_SIZE page at a time (or
+    # less, as the limit runs out), using keyset pagination on
+    # sequence_position in the read's direction, so a long stream never has
+    # to fit in memory and a partially consumed enumerator stops fetching.
+    def paginated_read(query, options)
+      Enumerator.new do |yielder|
+        loop do
+          page = options.page_size(BATCH_SIZE)
+          rows = fetch_batch(query, after: options.after, before: options.before, order: options.order, limit: page)
+          rows.each { |row| yielder << @row_mapper.to_sequenced_event(row) }
+          break if rows.size < page
+
+          options = options.after_page(Integer(rows.last["sequence_position"]), rows.size)
+          break unless options
         end
       end
     end
@@ -277,9 +285,11 @@ module DcbEventStore
       raise NotImplementedError, "#{self.class} must implement #import_event"
     end
 
-    # One page of matching rows as string-keyed hashes, ordered by ascending
-    # sequence position, starting after +after+ (nil = from the beginning).
-    def fetch_batch(query, after:, limit:)
+    # One page of at most +limit+ matching rows as string-keyed hashes,
+    # ordered by sequence position (+order+ :asc or :desc), between +after+
+    # and +before+ (either nil = unbounded on that side). The arguments are
+    # SqlBuilder#read_sql's.
+    def fetch_batch(query, after:, before:, order:, limit:)
       raise NotImplementedError, "#{self.class} must implement #fetch_batch"
     end
 

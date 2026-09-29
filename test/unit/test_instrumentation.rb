@@ -167,6 +167,23 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
     assert_equal 2, payload[:event_count]
   end
 
+  # The read options sit in the payload as nil unless set, so the log
+  # subscribers (which drop nil values) render a plain read as before.
+  def test_read_payload_carries_the_read_options_nil_unless_set
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+    @events.clear
+    query = DcbEventStore::Query.all
+
+    @store.read(query).to_a
+    @store.read_from(query, before: 2, backwards: true, limit: 1).to_a
+
+    identity = {store: "DcbEventStore::InMemoryStore", namespace: nil, query: query}
+    assert_equal identity.merge(after: nil, before: nil, backwards: nil, limit: nil, event_count: 2),
+                 @events[0].payload
+    assert_equal identity.merge(after: nil, before: 2, backwards: true, limit: 1, event_count: 1),
+                 @events[1].payload
+  end
+
   def test_read_from_includes_after_position
     appended = @store.append([
                                DcbEventStore::Event.new(type: "A"),

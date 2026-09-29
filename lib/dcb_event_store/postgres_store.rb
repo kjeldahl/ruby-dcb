@@ -166,7 +166,7 @@ module DcbEventStore
           break if rows.size < BATCH_SIZE
         end
       end
-      instrument_subscribe(instrument_read(events, query, after), query, phase, &)
+      instrument_subscribe(instrument_read(events, query, ReadOptions.new(after: after)), query, phase, &)
       @held_back = pending?(query, cursor)
       cursor
     end
@@ -181,9 +181,9 @@ module DcbEventStore
       @conn.exec_params(sql, params).ntuples.positive?
     end
 
-    def fetch_batch(query, after:, limit:)
-      sql, params = @sql.read_sql(query, after: after)
-      @conn.exec_params("#{sql} LIMIT #{limit}", params).to_a
+    def fetch_batch(query, **page)
+      sql, params = @sql.read_sql(query, **page)
+      @conn.exec_params(sql, params).to_a
     end
 
     def fetch_by_ids(ids)

@@ -544,6 +544,20 @@ module StoreContract
     assert_instance_of DcbEventStore::ConditionNotMet, appends[0].error
   end
 
+  def test_read_instrumentation_carries_the_read_options
+    @store.append([DcbEventStore::Event.new(type: "A"), DcbEventStore::Event.new(type: "B")])
+
+    seen = with_instrumentation do
+      @store.read(DcbEventStore::Query.all).to_a
+      @store.read_from(DcbEventStore::Query.all, before: 2, backwards: true, limit: 1).to_a
+    end
+
+    plain, backwards = seen.select { |event| event.name == "read.dcb" }.map(&:payload)
+    assert_equal [nil, nil, nil, nil], plain.values_at(:after, :before, :backwards, :limit)
+    assert_equal [nil, 2, true, 1], backwards.values_at(:after, :before, :backwards, :limit)
+    assert_equal 1, backwards[:event_count]
+  end
+
   # Swaps in a fresh global Notifications instance for the duration of the
   # block and returns the events published while it ran.
   def with_instrumentation
@@ -555,6 +569,83 @@ module StoreContract
     seen
   ensure
     DcbEventStore.instrumentation = previous
+  end
+
+  # --- backwards read and limit (issue #51) ---
+
+  def test_read_backwards_returns_newest_first
+    @store.append(%w[A B C].map { |type| DcbEventStore::Event.new(type: type) })
+
+    assert_equal %w[C B A], @store.read(DcbEventStore::Query.all, backwards: true).map(&:type)
+  end
+
+  def test_read_backwards_filters_by_query
+    @store.append([
+                    DcbEventStore::Event.new(type: "Renamed", data: {name: "one"}, tags: ["user:1"]),
+                    DcbEventStore::Event.new(type: "Renamed", data: {name: "other"}, tags: ["user:2"]),
+                    DcbEventStore::Event.new(type: "Renamed", data: {name: "two"}, tags: ["user:1"]),
+                    DcbEventStore::Event.new(type: "Seen", tags: ["user:1"])
+                  ])
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Renamed"], tags: ["user:1"])])
+
+    assert_equal [{name: "two"}, {name: "one"}], @store.read(query, backwards: true).map(&:data)
+  end
+
+  def test_latest_matching_event_is_a_backwards_read_of_one
+    @store.append(%w[A B A C].map { |type| DcbEventStore::Event.new(type: type) })
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+
+    latest = @store.read(query, backwards: true, limit: 1).to_a
+    assert_equal [3], latest.map(&:sequence_position)
+  end
+
+  def test_read_limit_stops_after_that_many_events
+    @store.append(%w[A B C].map { |type| DcbEventStore::Event.new(type: type) })
+
+    assert_equal %w[A B], @store.read(DcbEventStore::Query.all, limit: 2).map(&:type)
+    assert_equal %w[A B C], @store.read(DcbEventStore::Query.all, limit: 10).map(&:type)
+  end
+
+  def test_read_from_after_with_limit
+    @store.append(%w[A B C D].map { |type| DcbEventStore::Event.new(type: type) })
+
+    assert_equal %w[B C], @store.read_from(DcbEventStore::Query.all, after: 1, limit: 2).map(&:type)
+  end
+
+  def test_read_from_before_reads_backwards_from_that_position
+    @store.append(%w[A B C D].map { |type| DcbEventStore::Event.new(type: type) })
+
+    assert_equal %w[C B A], @store.read_from(DcbEventStore::Query.all, before: 4, backwards: true).map(&:type)
+    assert_equal %w[B], @store.read_from(DcbEventStore::Query.all, before: 3, backwards: true, limit: 1).map(&:type)
+    assert_empty @store.read_from(DcbEventStore::Query.all, before: 1, backwards: true).to_a
+  end
+
+  def test_read_from_before_with_a_tag_query
+    @store.append([
+                    DcbEventStore::Event.new(type: "A", tags: ["t:1"]),
+                    DcbEventStore::Event.new(type: "B", tags: ["t:2"]),
+                    DcbEventStore::Event.new(type: "C", tags: ["t:1"]),
+                    DcbEventStore::Event.new(type: "D", tags: ["t:1"])
+                  ])
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+
+    assert_equal %w[C A], @store.read_from(query, before: 4, backwards: true).map(&:type)
+  end
+
+  def test_read_from_with_neither_bound_reads_everything
+    @store.append(%w[A B].map { |type| DcbEventStore::Event.new(type: type) })
+
+    assert_equal %w[A B], @store.read_from(DcbEventStore::Query.all).map(&:type)
+    assert_equal %w[B A], @store.read_from(DcbEventStore::Query.all, backwards: true).map(&:type)
+  end
+
+  def test_read_rejects_mismatched_bounds_and_bad_limits
+    all = DcbEventStore::Query.all
+    assert_raises(ArgumentError) { @store.read_from(all, after: 1, backwards: true) }
+    assert_raises(ArgumentError) { @store.read_from(all, before: 1) }
+    assert_raises(ArgumentError) { @store.read(all, limit: 0) }
+    assert_raises(ArgumentError) { @store.read(all, backwards: nil) }
+    assert_raises(ArgumentError) { @store.read(all, after: 1) }
   end
 
   # --- pagination ---
@@ -587,6 +678,39 @@ module StoreContract
     assert(positions.all? { |p| p > after })
     assert_equal positions.sort, positions
     assert_equal positions.uniq, positions
+  end
+
+  def test_read_backwards_paginates_across_batch_boundary
+    total = BATCH_SIZE + 25
+    append_many(total)
+
+    positions = @store.read(DcbEventStore::Query.all, backwards: true).map(&:sequence_position)
+
+    assert_equal total, positions.size
+    assert_equal positions.sort.reverse, positions
+    assert_equal positions.uniq, positions
+  end
+
+  def test_read_from_before_paginates_across_batch_boundary
+    total = BATCH_SIZE + 25
+    appended = append_many(total)
+    before = appended[-10].sequence_position
+
+    positions = @store.read_from(DcbEventStore::Query.all, before: before, backwards: true).map(&:sequence_position)
+
+    assert_equal total - 10, positions.size
+    assert(positions.all? { |p| p < before })
+    assert_equal positions.sort.reverse, positions
+  end
+
+  def test_limit_spanning_batches_returns_exactly_that_many
+    append_many(BATCH_SIZE + 25)
+
+    forwards = @store.read(DcbEventStore::Query.all, limit: BATCH_SIZE + 5).map(&:sequence_position)
+    backwards = @store.read(DcbEventStore::Query.all, backwards: true, limit: BATCH_SIZE + 5).map(&:sequence_position)
+
+    assert_equal (1..(BATCH_SIZE + 5)).to_a, forwards
+    assert_equal (21..(BATCH_SIZE + 25)).to_a.reverse, backwards
   end
 
   # Appends `count` events in chunks, so crossing the read batch boundary

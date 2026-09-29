@@ -69,6 +69,32 @@ class TestSqlBuilder < Minitest::Test
     assert_equal ["{A}", 3], params
   end
 
+  def test_read_sql_match_all_with_before
+    sql, params = @builder.read_sql(DcbEventStore::Query.all, before: 7, order: :desc)
+    assert_equal "SELECT * FROM events WHERE sequence_position < $1 ORDER BY sequence_position DESC", sql
+    assert_equal [7], params
+  end
+
+  def test_read_sql_query_with_before_wraps_clause
+    sql, params = @builder.read_sql(query([item(event_types: ["A"]), item(tags: ["t1"])]), before: 3, order: :desc)
+    expected = "SELECT * FROM events WHERE ((type = ANY($1::text[])) OR (tags @> $2::text[])) " \
+               "AND sequence_position < $3 ORDER BY sequence_position DESC"
+    assert_equal expected, sql
+    assert_equal ["{A}", "{t1}", 3], params
+  end
+
+  def test_read_sql_with_both_bounds
+    sql, params = @builder.read_sql(DcbEventStore::Query.all, after: 2, before: 9)
+    assert_equal "SELECT * FROM events WHERE sequence_position > $1 AND sequence_position < $2 " \
+                 "ORDER BY sequence_position ASC", sql
+    assert_equal [2, 9], params
+
+    sql, params = @builder.read_sql(query([item(event_types: ["A"])]), after: 2, before: 9)
+    assert_equal "SELECT * FROM events WHERE ((type = ANY($1::text[]))) AND sequence_position > $2 " \
+                 "AND sequence_position < $3 ORDER BY sequence_position ASC", sql
+    assert_equal ["{A}", 2, 9], params
+  end
+
   # --- read_sql ordering / paging (browser) ---
 
   def test_read_sql_order_desc
@@ -373,6 +399,16 @@ class TestSqlBuilderSqlite < Minitest::Test
                "AND sequence_position > ? ORDER BY sequence_position ASC"
     assert_equal expected, sql
     assert_equal ['["A"]', 3], params
+  end
+
+  def test_read_sql_backwards_bounds_the_tag_subquery_with_before
+    sql, params = @builder.read_sql(query([item(tags: ["t1"])]), before: 7, order: :desc)
+    expected = "SELECT * FROM events WHERE ((sequence_position IN (SELECT sequence_position FROM event_tags " \
+               "WHERE tag IN (SELECT value FROM json_each(?)) AND sequence_position < ? " \
+               "GROUP BY sequence_position HAVING COUNT(*) = ?))) AND sequence_position < ? " \
+               "ORDER BY sequence_position DESC"
+    assert_equal expected, sql
+    assert_equal ['["t1"]', 7, 1, 7], params
   end
 
   # --- by_ids_sql ---

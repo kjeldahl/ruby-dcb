@@ -139,6 +139,14 @@ query = DcbEventStore::Query.new([
 events = store.read(query).to_a
 ```
 
+Reads are lazy and go forwards (oldest first) by default. `backwards: true` reads newest first, and `limit:` caps the number of events, pushed into the SQL so `limit: 1` fetches one row. `read_from` starts past a position: `after:` forwards, `before:` backwards (both exclusive; mixing them up raises `ArgumentError`):
+
+```ruby
+latest = store.read(query, backwards: true, limit: 1).first         # most recent match
+store.read_from(query, after: 41, limit: 100)                       # next 100 after position 41
+store.read_from(query, before: 42, backwards: true)                 # everything before 42, newest first
+```
+
 **Append conditions** enforce consistency — fail if matching events appeared since your last read:
 
 ```ruby
@@ -293,7 +301,7 @@ Emitted events and payloads:
 | Event | Emitted by | Payload |
 |-------|------------|---------|
 | `append.dcb` | `SqlStore#append` (both SQL backends), `InMemoryStore#append` | `store:`, `namespace:`, `event_count:`, `event_types:`, `condition:` (boolean), plus `appended_count:` and `last_position:` on success |
-| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `namespace:`, `query:`, `after:`, `event_count:` |
+| `read.dcb` | `SqlStore#read`/`#read_from`, `InMemoryStore#read`/`#read_from` | `store:`, `namespace:`, `query:`, `after:`, `before:`, `backwards:`, `limit:` (nil unless set), `event_count:` |
 | `projection.dcb` | `Projection#fold` | `event_types:`, `event_count:` |
 | `decision_model.dcb` | `DecisionModel.build` | `projections:` (names), `event_count:`, `last_position:`, and with a snapshot store `snapshots_loaded:`, `snapshots_written:` |
 | `snapshot.dcb` | `DecisionModel.build` around its snapshot store calls | `store:` (snapshot store), `namespace:`, `operation: :load` once per build with `projections:`, `requested:`, `loaded:` — `operation: :write` once per snapshot written with `projection:`, `key:`, `position:`, `folded_count:` |

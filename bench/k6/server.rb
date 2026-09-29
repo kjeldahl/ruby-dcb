@@ -68,19 +68,14 @@ module Bench
       [200, JSON_HEADERS, [JSON.generate(events.map { |e| to_json_event(e) })]]
     end
 
-    # Lazy: a limited read stops after +limit+ rows. +from+ is inclusive.
+    # +from+ is inclusive, the store's bounds exclusive. The limit goes into
+    # the store's SQL.
     def read_forwards(query, from, limit)
-      stream = from ? store.read_from(query, after: from - 1) : store.read(query)
-      limit ? stream.first(limit) : stream.to_a
+      store.read_from(query, after: from && (from - 1), limit: limit).to_a
     end
 
-    # The store reads forwards only, so a backwards read scans the matching
-    # stream (up to +from+, inclusive) and keeps its tail.
     def read_backwards(query, from, limit)
-      stream = store.read(query)
-      stream = stream.take_while { |e| e.sequence_position <= from } if from
-      tail = stream.to_a.reverse
-      limit ? tail.first(limit) : tail
+      store.read_from(query, before: from && (from + 1), backwards: true, limit: limit).to_a
     end
 
     def append(body)
