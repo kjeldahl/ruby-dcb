@@ -522,7 +522,7 @@ client = DcbEventStore::Client.new(store)
 
 It implements the same API and semantics — append conditions, idempotent writes, query filtering, upcasting — verified by the shared contract suite (`test/support/store_contract.rb`) that runs against all three stores, plus a side-by-side equivalence test.
 
-Limitations: it is **single-threaded** (no locking; intended for tests only), reads scan the whole log, and `subscribe` never blocks — it catches up and then delivers matching events synchronously as they are appended. For tests that need real SQL without a server, use `SqliteStore` on a temporary file.
+Limitations: it is **single-threaded** (no locking; intended for tests only) and `subscribe` never blocks — it catches up and then delivers matching events synchronously as they are appended. Reads go through type and tag indexes built at append (events never change), so a read costs what it matches, not the size of the log. For tests that need real SQL without a server, use `SqliteStore` on a temporary file.
 
 ### Browsing events (web UI)
 

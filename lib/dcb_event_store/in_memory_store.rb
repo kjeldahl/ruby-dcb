@@ -9,11 +9,19 @@ module DcbEventStore
   # notifications; it catches up on existing events and then delivers
   # matching events synchronously as they are appended.
   #
+  # Events are immutable and positions only grow, so reads go through
+  # per-type and per-tag lists of positions, each sorted by construction,
+  # rather than scanning the log: a read costs what it matches, not what is
+  # stored.
+  #
   # Every instance is its own log, so +namespace:+ changes nothing here; it
   # is accepted (and validated) so a store can be built the same way
   # whichever backend it turns out to be.
   class InMemoryStore
     include StoreInstrumentation
+
+    EMPTY = [].freeze
+    private_constant :EMPTY
 
     # The Namespace this store was built with.
     attr_reader :namespace
@@ -23,7 +31,9 @@ module DcbEventStore
       @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
       @namespace = Namespace.wrap(namespace)
       @rows = []
-      @ids = Set.new
+      @positions_by_id = {}
+      @positions_by_type = {}
+      @positions_by_tag = {}
       @next_position = 1
       @listeners = []
     end
@@ -51,7 +61,7 @@ module DcbEventStore
 
       instrument_append(events, condition) do |payload|
         ids = events.map(&:id).uniq
-        if ids.all? { |id| @ids.include?(id) }
+        if ids.all? { |id| @positions_by_id.key?(id) }
           payload[:replayed] = true
           next replay(ids)
         end
@@ -111,55 +121,105 @@ module DcbEventStore
     def each_matching(query, options)
       Enumerator.new do |yielder|
         yielded = 0
-        each_row(options) do |row|
-          next unless matches?(query, row)
-
-          yielder << row_to_sequenced_event(row)
+        each_position(query, options) do |position|
+          yielder << row_to_sequenced_event(row_at(position))
           yielded += 1
           break if yielded == options.limit
         end
       end
     end
 
-    # The rows within the read's bound, in its direction. Walked by index
-    # rather than with #each: a forward read also sees rows appended while
-    # it runs (a subscriber appending from its block), as a SQL store's next
-    # page would.
-    def each_row(options, &)
-      options.backwards ? each_row_backwards(options.before, &) : each_row_forwards(options.after, &)
-    end
+    # The positions matching +query+ within the read's bound, in its
+    # direction. A forward read asks again past the rows it searched when
+    # more were appended while it ran (a subscriber appending from its
+    # block), as a SQL store's next page would see them.
+    def each_position(query, options, &)
+      limit = options.limit
+      if options.backwards
+        return matching_positions(query, nil, options.before, limit: limit, backwards: true).reverse_each(&)
+      end
 
-    def each_row_forwards(after)
-      index = 0
-      while index < @rows.length
-        row = @rows.fetch(index)
-        index += 1
-        yield row unless after && row.fetch(:sequence_position) <= after
+      after = options.after
+      loop do
+        searched = @rows.length
+        matching_positions(query, after, nil, limit: limit).each(&)
+        break if @rows.length == searched
+
+        # Rows were appended from the block, so this search yielded a row
+        # past +after+: everything up to +searched+ is done.
+        after = searched
       end
     end
 
-    def each_row_backwards(before)
-      index = @rows.length
-      while index.positive?
-        index -= 1
-        row = @rows.fetch(index)
-        yield row unless before && row.fetch(:sequence_position) >= before
+    # Ascending positions matching +query+, strictly between +after+ and
+    # +before+ (either nil for no bound). With a +limit+ each list gives up
+    # at most that many from the read's end, enough for the read to stop
+    # after +limit+ events. A Range for Query.all, so an unfiltered read
+    # with a limit does not list the whole log.
+    def matching_positions(query, after, before, limit: nil, backwards: false)
+      first = after ? [after + 1, 1].max : 1
+      last = before ? [before - 1, @rows.length].min : @rows.length
+      return first..last if query.match_all?
+
+      positions = query.items.flat_map do |item|
+        candidate_lists(item).flat_map do |list|
+          matching_in(item, between(list, after, before), limit, backwards)
+        end
       end
+      positions.sort!
+      positions.uniq!
+      positions
+    end
+
+    # The positions of +slice+ that match +item+: all of them, or the first
+    # +limit+ from the read's end.
+    def matching_in(item, slice, limit, backwards)
+      return slice.select { |position| item_matches?(item, row_at(position)) } unless limit
+
+      walk = backwards ? slice.reverse_each : slice
+      walk.lazy.select { |position| item_matches?(item, row_at(position)) }.first(limit)
+    end
+
+    # The lists that between them hold every position matching +item+,
+    # the fewest positions to check: its shortest tag list, or all its type
+    # lists together when they are shorter still (a tie goes to the tag
+    # list: one list, nothing to merge).
+    def candidate_lists(item)
+      tag_list = item.tags.map { |tag| @positions_by_tag.fetch(tag, EMPTY) }.min_by(&:length)
+      type_lists = item.event_types.map { |type| @positions_by_type.fetch(type, EMPTY) }
+      return type_lists unless tag_list
+      return [tag_list] if type_lists.empty? || tag_list.length <= type_lists.sum(&:length)
+
+      type_lists
+    end
+
+    # The slice of the ascending +list+ strictly between +after+ and +before+
+    # (a nil end leaves that side of the range open).
+    def between(list, after, before)
+      first = after && (list.bsearch_index { |position| position > after } || list.length)
+      last = before && list.bsearch_index { |position| position >= before }
+      list[first...last]
+    end
+
+    # Positions are 1, 2, 3, ... with no gaps, so a row's index is its
+    # position less one.
+    def row_at(position)
+      @rows.fetch(position - 1)
     end
 
     # Some of +ids+ stored (all of them is a replay, handled before).
     def reject_stored!(ids)
-      stored = ids.select { |id| @ids.include?(id) }
+      stored = ids.select { |id| @positions_by_id.key?(id) }
       raise DuplicateEvent, stored unless stored.empty?
     end
 
     # The stored events with these ids, in log order.
     def replay(ids)
-      @rows.filter_map { |row| row_to_sequenced_event(row) if ids.include?(row.fetch(:event_id)) }
+      ids.map { |id| @positions_by_id.fetch(id) }.sort.map { |position| row_to_sequenced_event(row_at(position)) }
     end
 
     def insert(event, created_at: Time.now, schema_version: 1)
-      return nil unless @ids.add?(event.id)
+      return nil if @positions_by_id.key?(event.id)
 
       row = {
         sequence_position: @next_position,
@@ -174,8 +234,16 @@ module DcbEventStore
       }
       @next_position += 1
       @rows << row
+      index!(row)
 
       row_to_appended_event(event, row)
+    end
+
+    def index!(row)
+      position = row.fetch(:sequence_position)
+      @positions_by_id[row.fetch(:event_id)] = position
+      (@positions_by_type[row.fetch(:type)] ||= []) << position
+      row.fetch(:tags).each { |tag| (@positions_by_tag[tag] ||= []) << position }
     end
 
     def row_to_appended_event(event, row)
@@ -212,12 +280,6 @@ module DcbEventStore
       )
     end
 
-    def matches?(query, row)
-      return true if query.match_all?
-
-      query.items.any? { |item| item_matches?(item, row) }
-    end
-
     def item_matches?(item, row)
       type_match = item.event_types.empty? || item.event_types.include?(row.fetch(:type))
       tag_match = item.tags.all? { |tag| row.fetch(:tags).include?(tag) }
@@ -227,8 +289,12 @@ module DcbEventStore
     def conflicting_events?(condition)
       query = condition.fail_if_events_match
       after = condition.after
-      @rows.any? do |row|
-        (after.nil? || row.fetch(:sequence_position) > after) && matches?(query, row)
+      return matching_positions(query, after, nil).any? if query.match_all?
+
+      query.items.any? do |item|
+        candidate_lists(item).any? do |list|
+          between(list, after, nil).any? { |position| item_matches?(item, row_at(position)) }
+        end
       end
     end
 

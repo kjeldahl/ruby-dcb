@@ -4,19 +4,23 @@
 # Performance benchmark using the course subscription model.
 #
 # Seeds a large dataset in bulk (PostgreSQL: COPY, SQLite: prepared INSERTs in
-# batched IMMEDIATE transactions), then benchmarks DCB operations:
+# batched IMMEDIATE transactions, in-memory: batched appends), then benchmarks
+# DCB operations:
 #   - Query selectivity (how well the tag index filters)
 #   - DecisionModel.build for subscribe_student (5 projections)
 #   - Append with condition check under load
 #   - Concurrent appends with contention
 #
-# Both SQL backends run the same measurements, so their numbers are directly
-# comparable; DCB_BACKEND=memory is rejected (see #run).
+# Every backend runs the same single-threaded measurements, so their numbers
+# are directly comparable. DCB_BACKEND=memory skips the concurrent sections:
+# InMemoryStore is not thread-safe and a forked process only appends to its
+# own copy.
 #
 # Usage:
 #   ruby examples/performance.rb              # default: 100k students, 500 courses
 #   ruby examples/performance.rb 1_000_000 2000  # custom: 1M students, 2k courses
 #   DCB_BACKEND=sqlite ruby examples/performance.rb 20000 100
+#   DCB_BACKEND=memory ruby examples/performance.rb 20000 100
 
 require_relative "../lib/dcb_event_store"
 require_relative "support/backend"
@@ -127,6 +131,7 @@ module Performance
 
     total = case session.name
             when "sqlite" then seed_sqlite!(session.connection, num_students, num_courses, subs_per_student, capacity)
+            when "memory" then seed_memory!(session.store, num_students, num_courses, subs_per_student, capacity)
             else seed_postgres!(session.connection, num_students, num_courses, subs_per_student, capacity)
             end
 
@@ -269,6 +274,49 @@ module Performance
     total
   end
 
+  # InMemoryStore has no bulk path: plain unconditional appends, SEED_BATCH
+  # events at a time, which also builds its type and tag indexes.
+  def self.seed_memory!(store, num_students, num_courses, subs_per_student, capacity)
+    batch = []
+    flush = lambda do |force = false|
+      return if batch.empty? || (!force && batch.size < SEED_BATCH)
+
+      store.append(batch)
+      batch = []
+    end
+
+    print "  Courses... "
+    _, t = measure do
+      num_courses.times do |i|
+        cid = "course-#{i}"
+        batch << DcbEventStore::Event.new(type: "CourseDefined", data: { course_id: cid, capacity: capacity },
+                                          tags: ["course:#{cid}"])
+        flush.call
+      end
+      flush.call(true)
+    end
+    puts "#{num_courses} events (#{t.round(2)}s)"
+
+    num_subs = num_students * subs_per_student
+    print "  Subscriptions... "
+    _, t = measure do
+      num_students.times do |si|
+        sid = "student-#{si}"
+        (0...num_courses).to_a.sample(subs_per_student).each do |ci|
+          cid = "course-#{ci}"
+          batch << DcbEventStore::Event.new(type: "StudentSubscribedToCourse",
+                                            data: { student_id: sid, course_id: cid },
+                                            tags: ["student:#{sid}", "course:#{cid}"])
+          flush.call
+        end
+      end
+      flush.call(true)
+    end
+    puts "#{num_subs} events (#{t.round(2)}s)"
+
+    num_courses + num_subs
+  end
+
   # -- Benchmarks ------------------------------------------------------------
 
   def self.percentile(sorted, p)
@@ -309,9 +357,10 @@ module Performance
   def self.run_benchmarks(session, num_students, num_courses)
     store = session.store
     client = DcbEventStore::Client.new(store)
-    # The tag lookup is a GIN index on PostgreSQL and the event_tags table on
-    # SQLite; the labels say which one the numbers belong to.
-    tag_index = session.name == "sqlite" ? "event_tags" : "GIN"
+    # The tag lookup is a GIN index on PostgreSQL, the event_tags table on
+    # SQLite and a position list per tag in memory; the labels say which one
+    # the numbers belong to.
+    tag_index = { "sqlite" => "event_tags", "memory" => "indexed" }.fetch(session.name, "GIN")
     n = 50 # iterations per benchmark
     bench_start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
@@ -404,6 +453,28 @@ module Performance
       result.states[:already_subscribed]
     end
 
+    if session.name == "memory"
+      puts
+      puts "--- Concurrent: skipped (InMemoryStore is single-threaded, one process) ---"
+    else
+      run_concurrent_benchmarks(session, num_courses, base)
+    end
+
+    bench_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - bench_start
+    puts
+    puts "Benchmarks completed in %.2fs" % bench_elapsed
+
+    # -- 7. Table stats --
+    puts
+    puts "--- Table stats ---"
+    case session.name
+    when "sqlite" then sqlite_stats(session.connection)
+    when "memory" then puts "  Events: #{session.store.last_position}"
+    else postgres_stats(session.connection)
+    end
+  end
+
+  def self.run_concurrent_benchmarks(session, num_courses, base)
     # -- 5. Concurrent append throughput --
     puts
     puts "--- Concurrent: 10 threads appending to different courses ---"
@@ -503,15 +574,6 @@ module Performance
         @proc_succeeded / proc_elapsed
       ]
     end
-
-    bench_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - bench_start
-    puts
-    puts "Benchmarks completed in %.2fs" % bench_elapsed
-
-    # -- 7. Table stats --
-    puts
-    puts "--- Table stats ---"
-    session.name == "sqlite" ? sqlite_stats(session.connection) : postgres_stats(session.connection)
   end
 
   def self.postgres_stats(conn)
@@ -543,13 +605,6 @@ module Performance
   def self.run
     num_students = (ARGV[0] || 100_000).to_i
     num_courses  = (ARGV[1] || 500).to_i
-
-    if Examples::Backend.selected == "memory"
-      warn "performance.rb needs a SQL backend: InMemoryStore scans the whole log per read " \
-           "and cannot be shared across threads or processes.\n" \
-           "Run it with DCB_BACKEND=postgres (default) or DCB_BACKEND=sqlite."
-      return
-    end
 
     Examples::Backend.with_session do |session|
       puts "=" * 70
