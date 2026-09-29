@@ -35,8 +35,11 @@ module StoreContract
     assert_equal "A", result[0].type
   end
 
-  def test_append_empty_array_returns_empty
-    assert_empty @store.append([])
+  def test_append_empty_array_raises
+    error = assert_raises(ArgumentError) { @store.append([]) }
+    assert_equal "append needs at least one event", error.message
+    assert_raises(ArgumentError) { @store.append(nil) }
+    assert_nil @store.last_position
   end
 
   def test_append_multiple_events
@@ -295,8 +298,7 @@ module StoreContract
   end
 
   # A tag repeated on one event, and a duplicate tag in the query itself, must
-  # not change what matches: backends that count tag matches in an index table
-  # have to deduplicate both sides.
+  # not change what matches. Event drops the repeat, so it is stored once.
   def test_read_matches_event_with_duplicate_tags
     @store.append([DcbEventStore::Event.new(type: "A", tags: %w[dup dup])])
 
@@ -305,7 +307,7 @@ module StoreContract
                                      ])
     events = @store.read(query).to_a
     assert_equal 1, events.size
-    assert_equal %w[dup dup], events[0].tags
+    assert_equal %w[dup], events[0].tags
   end
 
   def test_read_with_duplicate_tags_in_query

@@ -78,9 +78,16 @@ class TestQuery < Minitest::Test
     assert_equal "{t:1,t:2}", qi.to_s
   end
 
-  def test_query_item_to_s_empty_is_any
-    qi = DcbEventStore::QueryItem.new(event_types: [], tags: [])
-    assert_equal "any", qi.to_s
+  def test_query_item_without_types_or_tags_raises
+    error = assert_raises(ArgumentError) { DcbEventStore::QueryItem.new(event_types: [], tags: []) }
+    assert_equal "QueryItem needs at least one event type or tag", error.message
+    assert_raises(ArgumentError) { DcbEventStore::QueryItem.new(event_types: nil) }
+  end
+
+  def test_query_item_deduplicates_types_and_tags
+    qi = DcbEventStore::QueryItem.new(event_types: %w[A A B], tags: ["t:1", :"t:1"])
+    assert_equal %w[A B], qi.event_types
+    assert_equal ["t:1"], qi.tags
   end
 
   def test_query_item_inspect_matches_to_s

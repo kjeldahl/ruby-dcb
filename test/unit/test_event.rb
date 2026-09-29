@@ -23,6 +23,11 @@ class TestEvent < Minitest::Test
     assert e.tags.frozen?
   end
 
+  def test_duplicate_tags_are_dropped_keeping_first_occurrence_order
+    e = DcbEventStore::Event.new(type: "Foo", tags: ["b:1", "a:1", :"b:1"])
+    assert_equal ["b:1", "a:1"], e.tags
+  end
+
   def test_frozen
     e = DcbEventStore::Event.new(type: "Foo")
     assert e.frozen?

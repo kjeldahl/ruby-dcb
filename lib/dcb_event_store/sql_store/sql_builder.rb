@@ -55,7 +55,7 @@ module DcbEventStore
         return match_all_where(after) if query.match_all?
 
         params = []
-        clauses = query.items.filter_map { |item| item_clause(item, params, after) }
+        clauses = query.items.map { |item| item_clause(item, params, after) }
         where = clauses.join(" OR ")
         where = "(#{where}) AND #{@dialect.after_clause(params, after)}" if after
 
@@ -73,7 +73,6 @@ module DcbEventStore
         parts = []
         parts << @dialect.type_in(params, item.event_types) unless item.event_types.empty?
         parts << @dialect.tags_contain(params, item.tags, after: after) unless item.tags.empty?
-        return if parts.empty?
 
         "(#{parts.join(' AND ')})"
       end

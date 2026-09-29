@@ -146,8 +146,8 @@ class TestSqlStore < Minitest::Test
     assert_equal [1, 3], @store.notified
   end
 
-  def test_append_of_nothing_skips_the_notification
-    assert_empty @store.append([])
+  def test_append_of_nothing_raises_before_writing
+    assert_raises(ArgumentError) { @store.append([]) }
     assert_empty @store.notified
   end
 

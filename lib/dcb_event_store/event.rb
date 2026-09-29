@@ -6,7 +6,7 @@ module DcbEventStore
       super(
         type: type.to_s,
         data: data,
-        tags: tags.map(&:to_s).freeze,
+        tags: tags.map(&:to_s).uniq.freeze,
         id: id,
         causation_id: causation_id,
         correlation_id: correlation_id
