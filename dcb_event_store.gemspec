@@ -8,7 +8,9 @@ Gem::Specification.new do |s|
   s.version     = DcbEventStore::VERSION
   s.summary     = "DCB-compliant event store backed by PostgreSQL or SQLite"
   s.authors     = ["Jacob"]
-  s.files       = Dir["lib/**/*.rb"]
+  s.files       = Dir["lib/**/*.rb"] + ["bin/dcb_events"]
+  s.bindir      = "bin"
+  s.executables = ["dcb_events"]
   s.required_ruby_version = ">= 3.3"
 
   s.add_dependency "logger", "~> 1.6"

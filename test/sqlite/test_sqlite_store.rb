@@ -7,6 +7,7 @@ require_relative "../support/decision_model_contract"
 require_relative "../support/upcaster_contract"
 require_relative "../support/in_memory_equivalence_contract"
 require_relative "../support/snapshot_decision_model_contract"
+require_relative "../support/import_export_contract"
 
 # Runs the shared backend contracts against SqliteStore, the same ones
 # PostgresStore (test/integration/) and InMemoryStore (test/unit/) run, plus
@@ -23,6 +24,7 @@ class TestSqliteStore < Minitest::Test
   include UpcasterContract
   include InMemoryEquivalenceContract
   include SnapshotDecisionModelContract
+  include ImportExportContract
 
   def setup
     setup_db

@@ -62,6 +62,33 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
     assert_equal 3, payload[:last_position]
   end
 
+  def exported(type)
+    DcbEventStore::SequencedEvent.new(
+      sequence_position: nil, type: type, data: {}, tags: [], created_at: nil,
+      id: SecureRandom.uuid, causation_id: nil, correlation_id: nil, schema_version: nil
+    )
+  end
+
+  def test_import_emits_event_with_counts_and_position
+    @store.append([DcbEventStore::Event.new(type: "Existing")])
+    known = exported("A")
+    @store.import([known])
+    @events.clear
+
+    imported = @store.import([known, exported("B"), exported("C")])
+
+    assert_equal %w[B C], imported.map(&:type)
+    assert_equal ["import.dcb"], @events.map(&:name)
+    payload = @events[0].payload
+    assert_equal({store: "DcbEventStore::InMemoryStore", event_count: 3, imported_count: 2, last_position: 4},
+                 payload)
+  end
+
+  def test_import_of_nothing_emits_nothing
+    assert_empty @store.import([])
+    assert_empty @events
+  end
+
   def test_append_reports_condition_presence
     query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Other"])])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
@@ -288,6 +315,26 @@ class TestSubscribeInstrumentation < InstrumentationTestCase
     # listeners must not be woken and no delivery round is emitted.
     store.append([DcbEventStore::Event.new(type: "A", id: id)])
 
+    assert_empty subscribe_events
+  end
+
+  def test_import_delivers_to_subscribers_once_and_not_for_known_ids
+    store = DcbEventStore::InMemoryStore.new(subscribe_instrumentation: :batch)
+    delivered = []
+    store.subscribe(DcbEventStore::Query.all) { |event| delivered << event.type }
+    event = DcbEventStore::SequencedEvent.new(
+      sequence_position: nil, type: "A", data: {}, tags: [], created_at: nil,
+      id: SecureRandom.uuid, causation_id: nil, correlation_id: nil, schema_version: nil
+    )
+    @events.clear
+
+    store.import([event])
+    assert_equal ["A"], delivered
+    assert_equal 1, subscribe_events.size
+
+    @events.clear
+    store.import([event])
+    assert_equal ["A"], delivered
     assert_empty subscribe_events
   end
 

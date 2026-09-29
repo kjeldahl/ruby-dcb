@@ -35,6 +35,8 @@ module DcbEventStore
   module StoreInstrumentation
     APPEND_EVENT = "append.dcb".freeze
     READ_EVENT = "read.dcb".freeze
+    # Emitted around Store#import (bulk writes of already-stored events).
+    IMPORT_EVENT = "import.dcb".freeze
     SUBSCRIBE_EVENT = "subscribe.dcb".freeze
     # Emitted by DecisionModel::Snapshotting around its snapshot store calls
     # (operation: :load once per build, :write once per snapshot written).
@@ -55,6 +57,19 @@ module DcbEventStore
         payload[:appended_count] = appended.size
         payload[:last_position] = appended.last&.sequence_position
         appended
+      end
+    end
+
+    def instrument_import(events)
+      DcbEventStore.instrumentation.instrument(
+        IMPORT_EVENT,
+        store: self.class.name,
+        event_count: events.size
+      ) do |payload|
+        imported = yield
+        payload[:imported_count] = imported.size
+        payload[:last_position] = imported.last&.sequence_position
+        imported
       end
     end
 

@@ -3,6 +3,7 @@ require_relative "../support/postgres_database"
 require_relative "../support/store_contract"
 require_relative "../support/special_characters_contract"
 require_relative "../support/in_memory_equivalence_contract"
+require_relative "../support/import_export_contract"
 
 # Runs the shared store contracts against PostgresStore.
 # TestInMemoryStore runs the identical contracts against InMemoryStore,
@@ -15,6 +16,7 @@ class TestStoreEquivalence < Minitest::Test
   include StoreContract
   include SpecialCharactersContract
   include InMemoryEquivalenceContract
+  include ImportExportContract
 
   def setup
     setup_db

@@ -1,4 +1,5 @@
 require "json"
+require "time"
 require_relative "../sql_store/timestamp"
 
 module DcbEventStore
@@ -92,6 +93,29 @@ module DcbEventStore
          event.causation_id, event.correlation_id, 1]
       end
 
+      # Single-row insert of one imported event: #insert_sql plus the
+      # schema_version and created_at the export carried (the column's own
+      # default when nil). Takes #import_params.
+      def import_sql
+        <<~SQL
+          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER)))
+          ON CONFLICT(event_id) DO NOTHING
+          RETURNING sequence_position, created_at
+        SQL
+      end
+
+      def import_params(event)
+        [*insert_params(event).take(6), event.schema_version || 1, encode_timestamp(event.created_at)]
+      end
+
+      # Epoch microseconds, the shape the created_at column stores and
+      # #decode_timestamp reads back, floored like Time#usec (so before 1970
+      # too) and like PostgreSQL's microsecond timestamps.
+      def encode_timestamp(time)
+        time && (time.to_r * MICROSECONDS_PER_SECOND).floor
+      end
+
       # Tag/type lists travel as JSON arrays of strings: the format the tags
       # column stores and json_each expands.
       def encode_list(arr)
@@ -108,7 +132,9 @@ module DcbEventStore
       # microseconds the schema's default stores, which SQLite hands straight
       # back as an Integer and which cost no parsing at all; the ISO 8601 text
       # a database created before the column became INTEGER still returns; and
-      # a Time, from a connection carrying a type translator of its own.
+      # a Time, from a connection carrying a type translator of its own. A
+      # TEXT column of an older database hands an imported epoch back as its
+      # digits (TEXT affinity turns the Integer into a String), read as such.
       #
       # Time.at's second argument is microseconds, and Ruby's floor division
       # borrows a whole second for timestamps before the epoch, so the split
@@ -117,6 +143,7 @@ module DcbEventStore
         case value
         when Integer then Time.at(value / MICROSECONDS_PER_SECOND, value % MICROSECONDS_PER_SECOND).utc
         when Time then value
+        when /\A-?\d+\z/ then decode_timestamp(value.to_i)
         else SqlStore::Timestamp.parse(value)
         end
       end

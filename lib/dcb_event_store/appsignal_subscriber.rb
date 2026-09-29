@@ -61,6 +61,7 @@ module DcbEventStore
 
       case event.name
       when StoreInstrumentation::APPEND_EVENT then record_append(event, tags)
+      when StoreInstrumentation::IMPORT_EVENT then record_import(event, tags)
       when StoreInstrumentation::SUBSCRIBE_EVENT then record_subscribe(event, tags)
       when StoreInstrumentation::SNAPSHOT_EVENT then record_snapshot(event, tags)
       when DecisionModel::EVENT then record_decision_model(event)
@@ -92,6 +93,11 @@ module DcbEventStore
       appended = event.payload[:appended_count]
       appsignal.increment_counter(metric("append", "events"), appended, tags) if appended&.positive?
       appsignal.increment_counter(metric("append", "conflicts"), 1, tags) if event.error.is_a?(ConditionNotMet)
+    end
+
+    def record_import(event, tags)
+      imported = event.payload[:imported_count]
+      appsignal.increment_counter(metric("import", "events"), imported, tags) if imported&.positive?
     end
 
     def record_subscribe(event, tags)

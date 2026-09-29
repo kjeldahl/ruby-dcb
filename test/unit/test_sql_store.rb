@@ -30,7 +30,7 @@ class TestSqlStore < Minitest::Test
   end
 
   class FakeSqlStore < DcbEventStore::SqlStore
-    attr_reader :rows, :notified, :lock_conditions
+    attr_reader :rows, :notified, :lock_conditions, :import_locks
     attr_accessor :matching_count
 
     def initialize(**)
@@ -40,6 +40,7 @@ class TestSqlStore < Minitest::Test
       @notified = []
       @lock_conditions = []
       @matching_count = 0
+      @import_locks = 0
     end
 
     private
@@ -54,6 +55,15 @@ class TestSqlStore < Minitest::Test
 
     def count_matching(_query, _after)
       @matching_count
+    end
+
+    def lock_for_import!
+      @import_locks += 1
+    end
+
+    def import_event(event)
+      row = insert_event(event)
+      row&.merge("schema_version" => (event.schema_version || 1).to_s)
     end
 
     def insert_event(event)
@@ -104,6 +114,8 @@ class TestSqlStore < Minitest::Test
     refute_implemented(:acquire_locks!, [], nil)
     refute_implemented(:count_matching, DcbEventStore::Query.all, nil)
     refute_implemented(:insert_event, event)
+    refute_implemented(:lock_for_import!)
+    refute_implemented(:import_event, event)
     refute_implemented(:fetch_batch, DcbEventStore::Query.all, after: nil, limit: 10)
     refute_implemented(:notify_appended, 1)
     refute_implemented(:listen)
@@ -174,6 +186,43 @@ class TestSqlStore < Minitest::Test
     assert_equal "conflicting event(s)", error.message
     assert_empty @store.rows
     assert_empty @store.notified
+  end
+
+  # --- import orchestration ---
+
+  def exported(type: "A", schema_version: 2)
+    DcbEventStore::SequencedEvent.new(
+      sequence_position: 50, type: type, data: {}, tags: [], created_at: Time.utc(2020, 1, 1),
+      id: SecureRandom.uuid, causation_id: nil, correlation_id: nil, schema_version: schema_version
+    )
+  end
+
+  def test_import_locks_once_inserts_in_order_and_notifies_last_position
+    imported = @store.import([exported(type: "A"), exported(type: "B", schema_version: nil)])
+
+    assert_equal 1, @store.import_locks
+    assert_equal %w[A B], imported.map(&:type)
+    assert_equal [1, 2], imported.map(&:sequence_position)
+    assert_equal [2, 1], imported.map(&:schema_version)
+    assert_equal [2], @store.notified
+  end
+
+  def test_import_wraps_a_single_event
+    assert_equal 1, @store.import(exported).size
+  end
+
+  def test_import_of_nothing_takes_no_lock_and_skips_the_notification
+    assert_empty @store.import([])
+    assert_equal 0, @store.import_locks
+    assert_empty @store.notified
+  end
+
+  def test_import_skips_stored_ids_without_notifying
+    event = exported
+    @store.import([event])
+
+    assert_empty @store.import([event])
+    assert_equal [1], @store.notified
   end
 
   # --- read orchestration ---

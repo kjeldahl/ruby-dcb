@@ -44,6 +44,21 @@ module DcbEventStore
       end
     end
 
+    # Same contract as SqlStore#import: keeps id, created_at and
+    # schema_version, assigns fresh positions in order, skips stored ids.
+    def import(events)
+      events = Array(events)
+      return [] if events.empty?
+
+      instrument_import(events) do
+        imported = events.filter_map do |event|
+          insert(event, created_at: (event.created_at || Time.now).floor(6), schema_version: event.schema_version || 1)
+        end
+        notify_listeners unless imported.empty?
+        imported
+      end
+    end
+
     def subscribe(query, after: nil, &block)
       listener = { query: query, last_position: after, block: block }
       deliver(listener, :catch_up)
@@ -67,7 +82,7 @@ module DcbEventStore
       end
     end
 
-    def insert(event)
+    def insert(event, created_at: Time.now, schema_version: 1)
       return nil unless @ids.add?(event.id)
 
       row = {
@@ -78,8 +93,8 @@ module DcbEventStore
         tags: event.tags,
         causation_id: event.causation_id,
         correlation_id: event.correlation_id,
-        schema_version: 1,
-        created_at: Time.now
+        schema_version: schema_version,
+        created_at: created_at
       }
       @next_position += 1
       @rows << row
@@ -97,7 +112,7 @@ module DcbEventStore
         id: event.id,
         causation_id: event.causation_id,
         correlation_id: event.correlation_id,
-        schema_version: 1
+        schema_version: row.fetch(:schema_version)
       )
     end
 

@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+# Exports events to, or imports them from, JSON Lines. See `dcb_events --help`.
+require_relative "../lib/dcb_event_store/cli"
+
+exit DcbEventStore::CLI.run(ARGV)
