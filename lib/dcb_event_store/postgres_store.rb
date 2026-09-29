@@ -122,7 +122,7 @@ module DcbEventStore
     # The append lock's global key, exclusively: every append holds it at
     # least shared, so none runs alongside an import.
     def lock_for_import!
-      @conn.exec("SELECT pg_advisory_xact_lock(#{LockKeys::APPEND_LOCK_KEY})")
+      @conn.exec("SELECT pg_advisory_xact_lock(#{@namespace.lock_offset + LockKeys::APPEND_LOCK_KEY})")
     end
 
     def import_event(event)

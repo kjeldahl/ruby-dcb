@@ -9,6 +9,7 @@ class TestInFlightAppend < Minitest::Test
   include PostgresDatabaseHelper
 
   cover "DcbEventStore::PostgresStore#acquire_locks!"
+  cover "DcbEventStore::PostgresStore#lock_for_import!"
 
   def setup
     setup_db
@@ -22,8 +23,8 @@ class TestInFlightAppend < Minitest::Test
   # uncommitted, until the test releases it: an append caught in flight.
   # +paused+ is set once it holds its locks and has inserted.
   class PausingStore < DcbEventStore::PostgresStore
-    def initialize(conn, paused:, release:)
-      super(conn)
+    def initialize(conn, paused:, release:, namespace: nil)
+      super(conn, namespace: namespace)
       @paused = paused
       @release = release
     end
@@ -44,17 +45,21 @@ class TestInFlightAppend < Minitest::Test
     DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: event_types, tags: tags)])
   end
 
-  # Starts +in_flight+ on a paused store and, once it holds its locks and has
+  # Starts +in_flight+ (the arguments of +operation+, #append unless told
+  # otherwise, in +in_flight_namespace+) on a paused store and, once it holds its locks and has
   # inserted, runs +racing+ on another connection. Returns what +racing+
   # produced, having checked it stayed blocked until the in-flight append
   # committed (or, with +blocks: false+, that it did not wait at all). A
   # racing append that does not block is the bug of issue #42: its condition
   # is evaluated against a log missing the in-flight event.
-  def race(in_flight:, racing:, blocks: true, racing_namespace: nil)
+  def race(in_flight:, racing:, blocks: true, racing_namespace: nil, in_flight_namespace: nil, operation: :append)
     paused_at = Concurrent::Event.new
     release = Concurrent::Event.new
     paused_conn = PostgresDatabaseHelper.connection
-    paused = Thread.new { PausingStore.new(paused_conn, paused: paused_at, release: release).append(*in_flight) }
+    paused = Thread.new do
+      PausingStore.new(paused_conn, paused: paused_at, release: release, namespace: in_flight_namespace)
+                  .public_send(operation, *in_flight)
+    end
     wait_for_locks(paused, paused_at)
 
     racer_conn = PostgresDatabaseHelper.connection
@@ -171,6 +176,32 @@ class TestInFlightAppend < Minitest::Test
 
     assert_equal :appended, outcome
     assert_equal 1, DcbEventStore::PostgresStore.new(@conn, namespace: "billing").last_position
+  ensure
+    DcbEventStore::PostgresStore::Schema.drop!(@conn, namespace: "billing")
+  end
+
+  # Issue #58: an import takes its own namespace's write lock, so it holds up
+  # an append in that namespace and leaves the default namespace's alone.
+  def test_namespaced_import_blocks_its_own_namespace_only
+    DcbEventStore::PostgresStore::Schema.create!(@conn, namespace: "billing")
+    sub = -> { DcbEventStore::Event.new(type: "Sub", tags: ["course:c1"]) }
+    import = lambda do
+      [[DcbEventStore::SequencedEvent.new(sequence_position: 1, type: "Sub", data: {}, tags: ["course:c1"],
+                                          id: SecureRandom.uuid, created_at: Time.now,
+                                          causation_id: nil, correlation_id: nil, schema_version: 1)]]
+    end
+
+    outcome = race(in_flight: import.call, operation: :import, in_flight_namespace: "billing",
+                   racing: ->(store) { store.append([sub.call]) }, racing_namespace: "billing")
+
+    assert_equal :appended, outcome
+    assert_equal 2, DcbEventStore::PostgresStore.new(@conn, namespace: "billing").last_position
+
+    outcome = race(in_flight: import.call, operation: :import, in_flight_namespace: "billing",
+                   racing: ->(store) { store.append([sub.call]) }, blocks: false)
+
+    assert_equal :appended, outcome
+    assert_equal 1, @store.last_position
   ensure
     DcbEventStore::PostgresStore::Schema.drop!(@conn, namespace: "billing")
   end

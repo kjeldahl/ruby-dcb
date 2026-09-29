@@ -132,6 +132,7 @@ class TestSqliteDialect < Minitest::Test
     dialect = DcbEventStore::SqliteStore::Dialect.new(namespace: "billing")
 
     assert_equal @dialect.insert_sql.sub("INTO events", "INTO billing_events"), dialect.insert_sql
+    assert_equal @dialect.import_sql.sub("INTO events", "INTO billing_events"), dialect.import_sql
     assert_equal "INSERT INTO billing_event_tags (tag, sequence_position) VALUES (?, ?)", dialect.insert_tag_sql
 
     params = []
