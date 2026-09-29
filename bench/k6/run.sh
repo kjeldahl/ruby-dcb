@@ -11,8 +11,9 @@
 # examples' database (DCB_PG_DBNAME, default dcb_event_store_test).
 #
 # Results: one k6 summary export (and server log) per run in bench/k6/results/,
-# k6's own report on stderr, then summarize.rb prints a markdown table to stdout and exits non-zero if a run is missing,
-# a request failed or a conformance check failed.
+# k6's own report on stderr, then summarize.rb prints a markdown table to
+# stdout and exits non-zero if a run is missing, a request failed or a
+# conformance check failed.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
