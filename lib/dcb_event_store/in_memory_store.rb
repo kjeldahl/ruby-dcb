@@ -76,6 +76,12 @@ module DcbEventStore
       nil
     end
 
+    # Same contract as SqlStore#settled?. Single-threaded, so nothing is
+    # ever in flight: the count alone decides.
+    def settled?(query, after:, through:, count:)
+      each_matching(query, after: after).count { |event| event.sequence_position <= through } == count
+    end
+
     private
 
     def each_matching(query, after:)

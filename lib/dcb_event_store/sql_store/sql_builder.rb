@@ -38,6 +38,15 @@ module DcbEventStore
         [sql, params]
       end
 
+      # SELECT COUNT(*) of the events matching +query+ in (+after+,
+      # +through+], +after+ nil meaning from the start: what a snapshot at
+      # +through+ must have folded (see SqlStore#settled?).
+      def count_between_sql(query, after, through)
+        where, params = where_clause(query, after)
+        bound = @dialect.through_clause(params, through)
+        ["SELECT COUNT(*) FROM #{@events} WHERE #{where ? "(#{where}) AND #{bound}" : bound}", params]
+      end
+
       # The "(VALUES ...)" row fragments and their bind parameters for inserting
       # +events+. +param_offset+ is the number of bind parameters already
       # consumed by a preceding clause, so the placeholders continue from there:
@@ -49,8 +58,9 @@ module DcbEventStore
         [value_rows, params.drop(param_offset)]
       end
 
-      private
-
+      # The WHERE condition (nil when there is none) matching +query+ after
+      # +after+, and its bind parameters: the part of #read_sql a backend
+      # builds its own statements around.
       def where_clause(query, after)
         return match_all_where(after) if query.match_all?
 
@@ -61,6 +71,8 @@ module DcbEventStore
 
         [where, params]
       end
+
+      private
 
       def match_all_where(after)
         return [nil, []] unless after

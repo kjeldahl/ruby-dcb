@@ -23,6 +23,11 @@ module DcbEventStore
   # wait for each other. The schema must have been installed for that
   # namespace (Schema.create!(conn, namespace: ...)).
   class PostgresStore < SqlStore
+    # Seconds a subscriber held back by an unfinished transaction waits
+    # before it looks again (see #deliver_new): that transaction need not be
+    # an append, and then no NOTIFY says it is done.
+    HELD_BACK_POLL = 0.1
+
     # Decoders the store installs on its connection. Only created_at is
     # touched: TIMESTAMPTZ (OID 1184) comes back as a Time the driver built
     # in C, which saves the row mapper a parse on every row read. Everything
@@ -45,7 +50,100 @@ module DcbEventStore
       @row_mapper = RowMapper.new(@dialect, @upcaster)
     end
 
+    # SqlStore#settled?, safe against appends in flight: a position is
+    # taken at INSERT and becomes visible at COMMIT, so an event matching
+    # +query+ below +through+ may still be uncommitted when the count runs,
+    # unless all of them share a tag (issue #55). Try, without waiting, for
+    # the advisory locks a condition on +query+ would take -- every append
+    # that could write a match holds one of them -- and count only once they
+    # are held, in a statement after them: a matching append that held one
+    # has committed by then, and one that comes after takes a later
+    # position. False when any lock is taken: a later build retries.
+    def settled?(query, after:, through:, count:)
+      with_write_transaction do
+        settle_locks?(query) && count_between(query, after, through) == count
+      end
+    end
+
     private
+
+    # Shared where an append takes exclusive: two settle checks on one tag
+    # need not fail each other. The global key stays exclusive for a query a
+    # tag cannot scope, since every append holds it shared.
+    def settle_locks?(query)
+      locks = LockKeys.for([], AppendCondition.new(fail_if_events_match: query))
+      offset = @namespace.lock_offset
+      global = locks.global == :exclusive ? "pg_try_advisory_xact_lock" : "pg_try_advisory_xact_lock_shared"
+      keys = locks.tags.map { |key| offset + key }
+      @conn.exec_params(<<~SQL, [offset + LockKeys::APPEND_LOCK_KEY, "{#{keys.join(',')}}"])[0]["ok"] == "t"
+        SELECT #{global}($1::bigint)
+           AND (SELECT coalesce(bool_and(pg_try_advisory_xact_lock_shared(k)), true)
+                  FROM unnest($2::bigint[]) AS k) AS ok
+      SQL
+    end
+
+    def count_between(query, after, through)
+      sql, params = @sql.count_between_sql(query, after, through)
+      @conn.exec_params(sql, params)[0]["count"].to_i
+    end
+
+    # A position alone cannot be a subscription cursor here: appends on
+    # disjoint tags take no common lock, so they can commit out of position
+    # order, and a subscriber past a position would never see an event below
+    # it that was still in flight (issue #54). The cursor is the
+    # [tx_id, sequence_position] of the last event delivered instead, and
+    # the subscription walks that order (see #deliver_new). +after+ (a
+    # position) resolves to the tx_id of the event at or below it.
+    def subscription_cursor(after)
+      return nil unless after
+
+      row = @conn.exec_params(<<~SQL, [after]).first
+        SELECT tx_id FROM #{@namespace.events_table}
+         WHERE sequence_position <= $1 ORDER BY sequence_position DESC LIMIT 1
+      SQL
+      row && [row["tx_id"], after]
+    end
+
+    # Delivers the events past +cursor+ in (tx_id, sequence_position) order,
+    # stopping at the first whose transaction is not older than the oldest
+    # one still running (pg_snapshot_xmin): every transaction below that is
+    # committed or gone, so no event can later appear below the cursor.
+    # Positions are delivered in commit order, not ascending; per tag the two
+    # agree, since an append takes its tag's lock before its transaction id.
+    # Stopping there marks the subscriber held back, which #wait_for_append
+    # turns into a poll.
+    def deliver_new(query, cursor, phase, &)
+      @held_back = false
+      after = cursor&.last
+      events = Enumerator.new do |yielder|
+        loop do
+          rows = fetch_in_commit_order(query, cursor, BATCH_SIZE)
+          rows.each do |row|
+            @held_back = row["settled"] == "f"
+            break if @held_back
+
+            cursor = [row["tx_id"], Integer(row["sequence_position"])]
+            yielder << @row_mapper.to_sequenced_event(row)
+          end
+          break if @held_back || rows.size < BATCH_SIZE
+        end
+      end
+      instrument_subscribe(instrument_read(events, query, after), query, phase, &)
+      cursor
+    end
+
+    def fetch_in_commit_order(query, cursor, limit)
+      where, params = @sql.where_clause(query, nil)
+      clauses = where ? ["(#{where})"] : []
+      if cursor
+        params.push(*cursor)
+        clauses << "(tx_id, sequence_position) > ($#{params.size - 1}::xid8, $#{params.size}::bigint)"
+      end
+      sql = "SELECT *, tx_id < pg_snapshot_xmin(pg_current_snapshot()) AS settled " \
+            "FROM #{@namespace.events_table}"
+      sql += " WHERE #{clauses.join(' AND ')}" unless clauses.empty?
+      @conn.exec_params("#{sql} ORDER BY tx_id, sequence_position LIMIT #{limit}", params).to_a
+    end
 
     def fetch_batch(query, after:, limit:)
       sql, params = @sql.read_sql(query, after: after)
@@ -149,7 +247,7 @@ module DcbEventStore
     end
 
     def wait_for_append
-      @conn.wait_for_notify
+      @conn.wait_for_notify(@held_back ? HELD_BACK_POLL : nil)
     end
 
     def with_write_transaction

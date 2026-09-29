@@ -35,14 +35,15 @@ module DcbEventStore
         end.to_h
       end
 
-      # Writes the snapshots that are due and returns how many. Each is
-      # written at the position its projection's read covered, and each
-      # write is one "snapshot.dcb" event (operation: :write) naming the
+      # Writes the snapshots that are due and settled, and returns how many.
+      # Each is written at the position its projection's read covered, and
+      # each write is one "snapshot.dcb" event (operation: :write) naming the
       # projection, the key, the position and how many events were folded
       # on top of the previous snapshot.
-      def self.store(snapshots, projections, folded, namespace)
+      def self.store(snapshots, projections, folded, namespace, event_store)
         due = projections.select do |name, proj|
-          due?(proj.snapshot, folded.entries[name], folded.positions.fetch(name))
+          due?(proj.snapshot, folded.entries[name], folded.positions.fetch(name)) &&
+            settled?(event_store, proj, folded, name)
         end
         due.each do |name, proj|
           position = folded.positions.fetch(name)
@@ -81,7 +82,25 @@ module DcbEventStore
         position - entry.position >= snapshot.every
       end
 
-      private_class_method :entries_from, :identity, :due?
+      # Whether the events the projection folded are, for good, every event
+      # matching its query from its snapshot up to the position the new one
+      # would be written at. A read only vouches for what was committed when
+      # it ran: on PostgreSQL an event below that position can still be in
+      # flight, and a snapshot written past it would never fold it (issue
+      # #55). The event store checks (#settled?); a store without that check
+      # is taken at its read. Not settled: no write, a later build retries.
+      def self.settled?(event_store, proj, folded, name)
+        return true unless event_store.respond_to?(:settled?)
+
+        events = folded.events_by_projection.fetch(name)
+        position = folded.positions.fetch(name)
+        return false if events.any? { |event| event.sequence_position > position }
+
+        event_store.settled?(proj.query, after: folded.entries[name]&.position, through: position,
+                                         count: events.size)
+      end
+
+      private_class_method :entries_from, :identity, :due?, :settled?
     end
   end
 end

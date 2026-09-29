@@ -95,6 +95,51 @@ class TestSqlBuilder < Minitest::Test
     assert_equal [9], params
   end
 
+  # --- count_between_sql ---
+
+  def test_count_between_sql_match_all_from_the_start
+    sql, params = @builder.count_between_sql(DcbEventStore::Query.all, nil, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE sequence_position <= $1", sql
+    assert_equal [8], params
+  end
+
+  def test_count_between_sql_match_all_with_after
+    sql, params = @builder.count_between_sql(DcbEventStore::Query.all, 2, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE (sequence_position > $1) AND sequence_position <= $2", sql
+    assert_equal [2, 8], params
+  end
+
+  # Wrapped: the OR of the items must not bind tighter than the bound.
+  def test_count_between_sql_wraps_the_items_before_the_bound
+    sql, params = @builder.count_between_sql(query([item(event_types: ["A"]), item(tags: ["t1"])]), nil, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE ((type = ANY($1::text[])) OR (tags @> $2::text[])) " \
+                 "AND sequence_position <= $3", sql
+    assert_equal ["{A}", "{t1}", 8], params
+  end
+
+  def test_count_between_sql_with_after
+    sql, params = @builder.count_between_sql(query([item(event_types: ["A"])]), 5, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE (((type = ANY($1::text[]))) AND sequence_position > $2) " \
+                 "AND sequence_position <= $3", sql
+    assert_equal ["{A}", 5, 8], params
+  end
+
+  def test_count_between_sql_counts_the_namespaced_table
+    builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PostgresStore::Dialect.new, namespace: "billing")
+    sql, = builder.count_between_sql(DcbEventStore::Query.all, nil, 1)
+    assert_equal "SELECT COUNT(*) FROM billing_events WHERE sequence_position <= $1", sql
+  end
+
+  # --- where_clause ---
+
+  def test_where_clause_is_nil_for_match_all_without_after
+    assert_equal [nil, []], @builder.where_clause(DcbEventStore::Query.all, nil)
+  end
+
+  def test_where_clause_joins_the_items
+    assert_equal ["(type = ANY($1::text[]))", ["{A}"]], @builder.where_clause(query([item(event_types: ["A"])]), nil)
+  end
+
   # --- namespace ---
 
   def test_namespaced_builder_reads_and_counts_the_namespaced_table

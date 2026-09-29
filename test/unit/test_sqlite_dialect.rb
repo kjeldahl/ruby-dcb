@@ -88,6 +88,14 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ["x", "y", 4], params
   end
 
+  # --- through_clause ---
+
+  def test_through_clause_binds_the_position_inclusively
+    params = %w[x]
+    assert_equal "sequence_position <= ?", @dialect.through_clause(params, 4)
+    assert_equal ["x", 4], params
+  end
+
   # --- insert_row ---
 
   def test_insert_row_is_uncast_and_appends_the_params

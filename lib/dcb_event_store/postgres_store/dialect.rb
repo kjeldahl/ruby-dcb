@@ -49,6 +49,12 @@ module DcbEventStore
         "sequence_position > #{placeholder(params.size)}"
       end
 
+      # Matches events stored at or before sequence position +through+.
+      def through_clause(params, through)
+        params << through
+        "sequence_position <= #{placeholder(params.size)}"
+      end
+
       # One "(...)" row fragment for a multi-row INSERT ... VALUES, appending
       # the event's parameters to +params+. The casts are explicit because the
       # values come from a VALUES list, where PostgreSQL cannot infer the

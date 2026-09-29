@@ -1,10 +1,12 @@
 module DcbEventStore
   class PostgresStore
-    # DDL for the PostgreSQL backend: the events table with its indexes (GIN
-    # on tags), the advisory-lock helper PostgresStore#acquire_locks! calls,
-    # the trigger that keeps the table append-only, and the
-    # projection_snapshots table Snapshots::PostgresSnapshotStore writes to
-    # (mutable by design: no trigger).
+    # DDL for the PostgreSQL backend (13 or later, for XID8): the events
+    # table with its indexes (GIN on tags; tx_id, the appending transaction's
+    # id, which PostgresStore#subscribe orders by), the advisory-lock helper
+    # PostgresStore#acquire_locks! calls, the trigger that keeps the table
+    # append-only, and the projection_snapshots table
+    # Snapshots::PostgresSnapshotStore writes to (mutable by design: no
+    # trigger).
     #
     # Installed once per namespace (see Namespace): each namespace gets its
     # own tables, indexes and trigger under its prefix, while the two
@@ -49,7 +51,9 @@ module DcbEventStore
       # opens with a transaction-scoped advisory lock, held until the script's
       # transaction ends, so installs racing at boot queue up instead of
       # failing on the shared functions ("tuple concurrently updated") or on
-      # the tables.
+      # the tables. The ALTER upgrades an events table from before tx_id:
+      # its rows all take the installing transaction's id, so they keep
+      # their position order.
       def self.create_sql(namespace = nil)
         namespace = Namespace.wrap(namespace)
         events = namespace.events_table
@@ -66,12 +70,15 @@ module DcbEventStore
             causation_id      UUID,
             correlation_id    UUID,
             schema_version    INTEGER NOT NULL DEFAULT 1,
-            created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+            tx_id             XID8 NOT NULL DEFAULT pg_current_xact_id()
           );
+          ALTER TABLE #{events} ADD COLUMN IF NOT EXISTS tx_id XID8 NOT NULL DEFAULT pg_current_xact_id();
           CREATE UNIQUE INDEX IF NOT EXISTS idx_#{events}_event_id ON #{events} (event_id);
           CREATE INDEX IF NOT EXISTS idx_#{events}_type ON #{events} (type);
           CREATE INDEX IF NOT EXISTS idx_#{events}_tags ON #{events} USING GIN (tags);
           CREATE INDEX IF NOT EXISTS idx_#{events}_correlation_id ON #{events} (correlation_id);
+          CREATE INDEX IF NOT EXISTS idx_#{events}_tx_id ON #{events} (tx_id, sequence_position);
 
           #{FUNCTIONS_SQL}
           DROP TRIGGER IF EXISTS enforce_append_only ON #{events};
