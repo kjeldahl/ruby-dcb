@@ -153,6 +153,80 @@ class TestSqlBuilder < Minitest::Test
     assert_equal [9], params
   end
 
+  # --- count_between_sql ---
+
+  def test_count_between_sql_match_all_from_the_start
+    sql, params = @builder.count_between_sql(DcbEventStore::Query.all, nil, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE sequence_position <= $1", sql
+    assert_equal [8], params
+  end
+
+  def test_count_between_sql_match_all_with_after
+    sql, params = @builder.count_between_sql(DcbEventStore::Query.all, 2, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE (sequence_position > $1) AND sequence_position <= $2", sql
+    assert_equal [2, 8], params
+  end
+
+  # Wrapped: the OR of the items must not bind tighter than the bound.
+  def test_count_between_sql_wraps_the_items_before_the_bound
+    sql, params = @builder.count_between_sql(query([item(event_types: ["A"]), item(tags: ["t1"])]), nil, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE ((type = ANY($1::text[])) OR (tags @> $2::text[])) " \
+                 "AND sequence_position <= $3", sql
+    assert_equal ["{A}", "{t1}", 8], params
+  end
+
+  def test_count_between_sql_with_after
+    sql, params = @builder.count_between_sql(query([item(event_types: ["A"])]), 5, 8)
+    assert_equal "SELECT COUNT(*) FROM events WHERE (((type = ANY($1::text[]))) AND sequence_position > $2) " \
+                 "AND sequence_position <= $3", sql
+    assert_equal ["{A}", 5, 8], params
+  end
+
+  def test_count_between_sql_counts_the_namespaced_table
+    builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PostgresStore::Dialect.new, namespace: "billing")
+    sql, = builder.count_between_sql(DcbEventStore::Query.all, nil, 1)
+    assert_equal "SELECT COUNT(*) FROM billing_events WHERE sequence_position <= $1", sql
+  end
+
+  # --- commit_order_sql / pending_sql ---
+
+  SETTLED = "tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint + events_tx_offset()".freeze
+
+  def test_commit_order_sql_from_the_start_reads_only_settled_events
+    sql, params = @builder.commit_order_sql(DcbEventStore::Query.all, nil)
+    assert_equal "SELECT * FROM events WHERE #{SETTLED} ORDER BY tx_id, sequence_position", sql
+    assert_equal [], params
+  end
+
+  def test_commit_order_sql_past_a_cursor_wraps_the_items
+    sql, params = @builder.commit_order_sql(query([item(event_types: ["A"]), item(tags: ["t1"])]), [40, 7])
+    assert_equal "SELECT * FROM events WHERE ((type = ANY($1::text[])) OR (tags @> $2::text[])) " \
+                 "AND (tx_id, sequence_position) > ($3::bigint, $4::bigint) AND #{SETTLED} " \
+                 "ORDER BY tx_id, sequence_position", sql
+    assert_equal ["{A}", "{t1}", 40, 7], params
+  end
+
+  def test_pending_sql_from_the_start_looks_at_everything
+    sql, params = @builder.pending_sql(DcbEventStore::Query.all, nil)
+    assert_equal "SELECT 1 FROM events LIMIT 1", sql
+    assert_equal [], params
+  end
+
+  def test_pending_sql_past_a_cursor_ignores_the_watermark
+    sql, params = @builder.pending_sql(query([item(event_types: ["A"])]), [40, 7])
+    assert_equal "SELECT 1 FROM events WHERE ((type = ANY($1::text[]))) " \
+                 "AND (tx_id, sequence_position) > ($2::bigint, $3::bigint) LIMIT 1", sql
+    assert_equal ["{A}", 40, 7], params
+  end
+
+  def test_commit_order_sql_uses_the_namespace_table_and_offset
+    builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PostgresStore::Dialect.new(namespace: "billing"),
+                                                      namespace: "billing")
+    sql, = builder.commit_order_sql(DcbEventStore::Query.all, nil)
+    assert_equal "SELECT * FROM billing_events WHERE tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint " \
+                 "+ billing_events_tx_offset() ORDER BY tx_id, sequence_position", sql
+  end
+
   # --- namespace ---
 
   def test_namespaced_builder_reads_and_counts_the_namespaced_table

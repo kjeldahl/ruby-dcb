@@ -1,5 +1,6 @@
 require_relative "../test_helper"
 require_relative "../support/postgres_database"
+require_relative "../support/in_flight_append"
 require "concurrent"
 
 # Issue #42: an append caught in flight (locks held, rows uncommitted) must
@@ -18,28 +19,6 @@ class TestInFlightAppend < Minitest::Test
     teardown_db
   end
 
-  # A store whose write transaction stays open, locks held and rows
-  # uncommitted, until the test releases it: an append caught in flight.
-  # +paused+ is set once it holds its locks and has inserted.
-  class PausingStore < DcbEventStore::PostgresStore
-    def initialize(conn, paused:, release:)
-      super(conn)
-      @paused = paused
-      @release = release
-    end
-
-    private
-
-    def with_write_transaction
-      super do
-        result = yield
-        @paused.set
-        @release.wait
-        result
-      end
-    end
-  end
-
   def query(event_types, tags = [])
     DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: event_types, tags: tags)])
   end
@@ -54,7 +33,9 @@ class TestInFlightAppend < Minitest::Test
     paused_at = Concurrent::Event.new
     release = Concurrent::Event.new
     paused_conn = PostgresDatabaseHelper.connection
-    paused = Thread.new { PausingStore.new(paused_conn, paused: paused_at, release: release).append(*in_flight) }
+    paused = Thread.new do
+      InFlightAppendHelper::PausingStore.new(paused_conn, paused: paused_at, release: release).append(*in_flight)
+    end
     wait_for_locks(paused, paused_at)
 
     racer_conn = PostgresDatabaseHelper.connection
