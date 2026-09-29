@@ -43,6 +43,8 @@ module DcbEventStore
 
     def append(events, condition = nil)
       events = Array(events)
+      raise ArgumentError, "append needs at least one event" if events.empty?
+
       instrument_append(events, condition) do
         with_write_transaction do
           acquire_locks!(events, condition)

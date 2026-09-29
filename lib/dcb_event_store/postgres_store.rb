@@ -99,7 +99,7 @@ module DcbEventStore
         cond_params + insert_params
       )
 
-      if result.ntuples.zero? && events.any?
+      if result.ntuples.zero?
         matching = count_matching(condition.fail_if_events_match, condition.after)
         raise ConditionNotMet, "conflicting event(s)" if matching.positive?
 

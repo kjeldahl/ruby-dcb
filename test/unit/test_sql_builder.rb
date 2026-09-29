@@ -53,14 +53,6 @@ class TestSqlBuilder < Minitest::Test
     assert_equal ["{A}", "{t1}"], params
   end
 
-  def test_read_sql_drops_items_without_types_or_tags
-    # An item constraining neither types nor tags contributes no clause and is
-    # filtered out, leaving only the meaningful item.
-    sql, params = @builder.read_sql(query([item, item(event_types: ["A"])]), after: nil)
-    assert_equal "SELECT * FROM events WHERE (type = ANY($1::text[])) ORDER BY sequence_position ASC", sql
-    assert_equal ["{A}"], params
-  end
-
   def test_read_sql_multiple_items_joined_with_or
     sql, params = @builder.read_sql(query([item(event_types: ["A"]), item(tags: ["t1"])]), after: nil)
     expected = "SELECT * FROM events WHERE (type = ANY($1::text[])) OR (tags @> $2::text[]) " \

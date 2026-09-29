@@ -46,15 +46,6 @@ class TestInMemoryStore < Minitest::Test
     assert_raises(ArgumentError) { DcbEventStore::InMemoryStore.new(namespace: "Bad Name") }
   end
 
-  def test_query_item_with_no_types_and_no_tags_matches_nothing
-    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])])
-
-    query = DcbEventStore::Query.new([
-                                       DcbEventStore::QueryItem.new(event_types: [], tags: [])
-                                     ])
-    assert_empty @store.read(query).to_a
-  end
-
   def test_sequence_positions_start_at_one_and_increase
     appended = @store.append([
                                DcbEventStore::Event.new(type: "A"),

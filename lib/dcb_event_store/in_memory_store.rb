@@ -43,6 +43,8 @@ module DcbEventStore
 
     def append(events, condition = nil)
       events = Array(events)
+      raise ArgumentError, "append needs at least one event" if events.empty?
+
       instrument_append(events, condition) do
         raise ConditionNotMet, "conflicting event(s)" if condition && conflicting_events?(condition)
 
@@ -151,8 +153,6 @@ module DcbEventStore
     end
 
     def item_matches?(item, row)
-      return false if item.event_types.empty? && item.tags.empty?
-
       type_match = item.event_types.empty? || item.event_types.include?(row.fetch(:type))
       tag_match = item.tags.all? { |tag| row.fetch(:tags).include?(tag) }
       type_match && tag_match
