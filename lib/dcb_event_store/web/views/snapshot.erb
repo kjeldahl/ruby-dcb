@@ -1,0 +1,14 @@
+<p><a href="<%= snapshots_url %>">&larr; Back to snapshots</a></p>
+
+<h2><%= h(snapshot.key) %></h2>
+
+<dl>
+  <dt>Key</dt><dd class="mono"><%= h(snapshot.key) %></dd>
+  <dt>Position</dt>
+  <dd><% if event_found -%><a href="<%= event_url(snapshot.position) %>">#<%= snapshot.position %></a><% else -%>#<%= snapshot.position %><% end -%></dd>
+  <dt>Behind head</dt><dd><%= head ? [head - snapshot.position, 0].max : "-" %></dd>
+  <dt>Updated at</dt><dd><%= format_time(snapshot.updated_at) %></dd>
+</dl>
+
+<h3>State</h3>
+<pre><%= h(pretty_json(snapshot.state)) %></pre>

@@ -20,18 +20,25 @@ module DcbEventStore
         @events = Namespace.wrap(namespace).events_table
       end
 
+      ORDERS = { asc: "ASC", desc: "DESC" }.freeze
+
       # SELECT for reading the event stream matching +query+, optionally only
-      # events after +after+, ordered by ascending sequence position.
-      def read_sql(query, after:)
+      # events after +after+. +order+ (:asc/:desc) sets the sequence_position
+      # ordering; +limit+/+offset+ page the result (used by the read-only
+      # browser). Defaults reproduce the store's ascending full-stream read.
+      def read_sql(query, after:, order: :asc, limit: nil, offset: nil)
+        direction = ORDERS.fetch(order) { raise ArgumentError, "order must be :asc or :desc" }
         where, params = where_clause(query, after)
         sql = "SELECT * FROM #{@events}"
         sql += " WHERE #{where}" if where
-        sql += " ORDER BY sequence_position ASC"
+        sql += " ORDER BY sequence_position #{direction}"
+        sql += " LIMIT #{Integer(limit)}" if limit
+        sql += " OFFSET #{Integer(offset)}" if offset
         [sql, params]
       end
 
-      # SELECT COUNT(*) used to evaluate an AppendCondition: how many existing
-      # events match +query+ after +after+.
+      # SELECT COUNT(*) used to evaluate an AppendCondition (and to total the
+      # browser): how many existing events match +query+ after +after+.
       def condition_sql(query, after)
         where, params = where_clause(query, after)
         sql = where ? "SELECT COUNT(*) FROM #{@events} WHERE #{where}" : "SELECT COUNT(*) FROM #{@events}"

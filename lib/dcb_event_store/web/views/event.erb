@@ -1,0 +1,17 @@
+<p><a href="<%= root_url %>">&larr; Back to events</a></p>
+
+<h2><%= h(event.type) %> <span class="pos">#<%= event.sequence_position %></span></h2>
+
+<dl>
+  <dt>Event ID</dt><dd class="mono"><%= h(event.id) %></dd>
+  <dt>Sequence position</dt><dd><%= event.sequence_position %></dd>
+  <dt>Created at</dt><dd><%= format_time(event.created_at) %></dd>
+  <dt>Schema version</dt><dd><%= event.schema_version %></dd>
+  <dt>Tags</dt>
+  <dd><% event.tags.each do |t| -%><a class="tag" href="<%= tag_url(t) %>" title="Filter by tag"><%= h(t) %></a> <% end -%></dd>
+  <dt>Causation ID</dt><dd class="mono"><%= h(event.causation_id || "-") %></dd>
+  <dt>Correlation ID</dt><dd class="mono"><%= h(event.correlation_id || "-") %></dd>
+</dl>
+
+<h3>Data</h3>
+<pre><%= h(pretty_json(event.data)) %></pre>

@@ -8,7 +8,7 @@ Gem::Specification.new do |s|
   s.version     = DcbEventStore::VERSION
   s.summary     = "DCB-compliant event store backed by PostgreSQL or SQLite"
   s.authors     = ["Jacob"]
-  s.files       = Dir["lib/**/*.rb"] + ["bin/dcb_events"]
+  s.files       = Dir["lib/**/*.{rb,erb}"] + ["bin/dcb_events"]
   s.bindir      = "bin"
   s.executables = ["dcb_events"]
   s.required_ruby_version = ">= 3.3"
@@ -25,6 +25,7 @@ Gem::Specification.new do |s|
   # load only when the application already has them.
   s.add_development_dependency "activesupport", ">= 7.1"
   s.add_development_dependency "railties", ">= 7.1"
+  s.add_development_dependency "rack", ">= 2.2"
   s.add_development_dependency "minitest", "~> 5.0"
   s.add_development_dependency "concurrent-ruby", "~> 1.2"
   s.add_development_dependency "rake", "~> 13.0"

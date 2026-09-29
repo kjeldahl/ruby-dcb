@@ -1,0 +1,37 @@
+<% unless available -%>
+  <p class="empty">No snapshots table for this namespace. Run <code>Schema.create!</code> to install it.</p>
+<% else -%>
+<form method="get" action="<%= base %>/snapshots" class="filters">
+  <% if namespace -%><input type="hidden" name="ns" value="<%= h(namespace) %>"><% end -%>
+  <input type="text" name="q" value="<%= h(params.match) %>" placeholder="key contains e.g. course_subscriptions/v1">
+  <input type="hidden" name="per_page" value="<%= params.per_page %>">
+  <button type="submit">Filter</button>
+  <% unless params.match.empty? -%><a href="<%= snapshots_url %>">clear</a><% end -%>
+</form>
+
+<p class="meta"><%= total %> snapshot(s)<%= " - log head at ##{head}" if head %></p>
+
+<% if snapshots.empty? -%>
+  <p class="empty">No snapshots</p>
+<% else -%>
+<table>
+  <thead><tr><th>Key</th><th>Position</th><th>Behind head</th><th>Updated</th></tr></thead>
+  <tbody>
+    <% snapshots.each do |s| -%>
+    <tr>
+      <td><a href="<%= snapshot_url(s.key) %>"><%= h(s.key) %></a></td>
+      <td><a href="<%= event_url(s.position) %>">#<%= s.position %></a></td>
+      <td><%= head ? [head - s.position, 0].max : "-" %></td>
+      <td><%= format_time(s.updated_at) %></td>
+    </tr>
+    <% end -%>
+  </tbody>
+</table>
+
+<div class="pager">
+  <% if params.page > 1 -%><a href="<%= snapshot_page_url(params.page - 1) %>">&larr; Newer</a><% end -%>
+  <span>Page <%= params.page %></span>
+  <% if params.page * params.per_page < total -%><a href="<%= snapshot_page_url(params.page + 1) %>">Older &rarr;</a><% end -%>
+</div>
+<% end -%>
+<% end -%>
