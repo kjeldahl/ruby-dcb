@@ -9,11 +9,19 @@ module DcbEventStore
   # notifications; it catches up on existing events and then delivers
   # matching events synchronously as they are appended.
   #
+  # Events are immutable and positions only grow, so reads go through
+  # per-type and per-tag lists of positions, each sorted by construction,
+  # rather than scanning the log: a read costs what it matches, not what is
+  # stored.
+  #
   # Every instance is its own log, so +namespace:+ changes nothing here; it
   # is accepted (and validated) so a store can be built the same way
   # whichever backend it turns out to be.
   class InMemoryStore
     include StoreInstrumentation
+
+    EMPTY = [].freeze
+    private_constant :EMPTY
 
     # The Namespace this store was built with.
     attr_reader :namespace
@@ -23,7 +31,9 @@ module DcbEventStore
       @subscribe_instrumentation = subscribe_instrumentation_mode(subscribe_instrumentation)
       @namespace = Namespace.wrap(namespace)
       @rows = []
-      @ids = Set.new
+      @positions_by_id = {}
+      @positions_by_type = {}
+      @positions_by_tag = {}
       @next_position = 1
       @listeners = []
     end
@@ -51,7 +61,7 @@ module DcbEventStore
 
       instrument_append(events, condition) do |payload|
         ids = events.map(&:id).uniq
-        if ids.all? { |id| @ids.include?(id) }
+        if ids.all? { |id| @positions_by_id.key?(id) }
           payload[:replayed] = true
           next replay(ids)
         end
@@ -111,55 +121,84 @@ module DcbEventStore
     def each_matching(query, options)
       Enumerator.new do |yielder|
         yielded = 0
-        each_row(options) do |row|
-          next unless matches?(query, row)
-
-          yielder << row_to_sequenced_event(row)
+        each_position(query, options) do |position|
+          yielder << row_to_sequenced_event(row_at(position))
           yielded += 1
           break if yielded == options.limit
         end
       end
     end
 
-    # The rows within the read's bound, in its direction. Walked by index
-    # rather than with #each: a forward read also sees rows appended while
-    # it runs (a subscriber appending from its block), as a SQL store's next
+    # The positions matching +query+ within the read's bound, in its
+    # direction. A forward read asks again past the last position it
+    # yielded until nothing is left, so it also sees rows appended while it
+    # runs (a subscriber appending from its block), as a SQL store's next
     # page would.
-    def each_row(options, &)
-      options.backwards ? each_row_backwards(options.before, &) : each_row_forwards(options.after, &)
-    end
+    def each_position(query, options, &)
+      return matching_positions(query, nil, options.before).reverse_each(&) if options.backwards
 
-    def each_row_forwards(after)
-      index = 0
-      while index < @rows.length
-        row = @rows.fetch(index)
-        index += 1
-        yield row unless after && row.fetch(:sequence_position) <= after
+      after = options.after
+      loop do
+        positions = matching_positions(query, after, nil)
+        break if positions.none?
+
+        positions.each(&)
+        after = positions.last
       end
     end
 
-    def each_row_backwards(before)
-      index = @rows.length
-      while index.positive?
-        index -= 1
-        row = @rows.fetch(index)
-        yield row unless before && row.fetch(:sequence_position) >= before
-      end
+    # Ascending positions matching +query+, strictly between +after+ and
+    # +before+ (either nil for no bound): a Range for Query.all, so an
+    # unfiltered read with a limit does not list the whole log.
+    def matching_positions(query, after, before)
+      first = after ? after + 1 : 1
+      last = before ? before - 1 : @rows.length
+      return first..last if query.match_all?
+
+      positions = query.items.flat_map { |item| item_positions(item, after, before) }
+      positions.sort!
+      positions.uniq!
+      positions
+    end
+
+    # Positions matching +item+: the shortest list that holds all of them
+    # (one of its tags', or its types' together), narrowed to the bound and
+    # checked against the rest of the item.
+    def item_positions(item, after, before)
+      candidates = item.tags.map { |tag| [@positions_by_tag.fetch(tag, EMPTY)] }
+      candidates << item.event_types.map { |type| @positions_by_type.fetch(type, EMPTY) } unless item.event_types.empty?
+      lists = candidates.min_by { |candidate| candidate.sum(&:length) }
+      lists.flat_map { |list| between(list, after, before) }
+           .select { |position| item_matches?(item, row_at(position)) }
+    end
+
+    # The slice of the ascending +list+ strictly between +after+ and +before+
+    # (a nil end leaves that side of the range open).
+    def between(list, after, before)
+      first = after && (list.bsearch_index { |position| position > after } || list.length)
+      last = before && list.bsearch_index { |position| position >= before }
+      list[first...last]
+    end
+
+    # Positions are 1, 2, 3, ... with no gaps, so a row's index is its
+    # position less one.
+    def row_at(position)
+      @rows.fetch(position - 1)
     end
 
     # Some of +ids+ stored (all of them is a replay, handled before).
     def reject_stored!(ids)
-      stored = ids.select { |id| @ids.include?(id) }
+      stored = ids.select { |id| @positions_by_id.key?(id) }
       raise DuplicateEvent, stored unless stored.empty?
     end
 
     # The stored events with these ids, in log order.
     def replay(ids)
-      @rows.filter_map { |row| row_to_sequenced_event(row) if ids.include?(row.fetch(:event_id)) }
+      ids.map { |id| @positions_by_id.fetch(id) }.sort.map { |position| row_to_sequenced_event(row_at(position)) }
     end
 
     def insert(event, created_at: Time.now, schema_version: 1)
-      return nil unless @ids.add?(event.id)
+      return nil if @positions_by_id.key?(event.id)
 
       row = {
         sequence_position: @next_position,
@@ -174,8 +213,16 @@ module DcbEventStore
       }
       @next_position += 1
       @rows << row
+      index!(row)
 
       row_to_appended_event(event, row)
+    end
+
+    def index!(row)
+      position = row.fetch(:sequence_position)
+      @positions_by_id[row.fetch(:event_id)] = position
+      (@positions_by_type[row.fetch(:type)] ||= []) << position
+      row.fetch(:tags).each { |tag| (@positions_by_tag[tag] ||= []) << position }
     end
 
     def row_to_appended_event(event, row)
@@ -212,12 +259,6 @@ module DcbEventStore
       )
     end
 
-    def matches?(query, row)
-      return true if query.match_all?
-
-      query.items.any? { |item| item_matches?(item, row) }
-    end
-
     def item_matches?(item, row)
       type_match = item.event_types.empty? || item.event_types.include?(row.fetch(:type))
       tag_match = item.tags.all? { |tag| row.fetch(:tags).include?(tag) }
@@ -225,11 +266,7 @@ module DcbEventStore
     end
 
     def conflicting_events?(condition)
-      query = condition.fail_if_events_match
-      after = condition.after
-      @rows.any? do |row|
-        (after.nil? || row.fetch(:sequence_position) > after) && matches?(query, row)
-      end
+      matching_positions(condition.fail_if_events_match, condition.after, nil).any?
     end
 
     def deliver(listener, phase)

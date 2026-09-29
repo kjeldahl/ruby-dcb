@@ -545,8 +545,8 @@ module Performance
     num_courses  = (ARGV[1] || 500).to_i
 
     if Examples::Backend.selected == "memory"
-      warn "performance.rb needs a SQL backend: InMemoryStore scans the whole log per read " \
-           "and cannot be shared across threads or processes.\n" \
+      warn "performance.rb needs a SQL backend: InMemoryStore " \
+           "cannot be shared across threads or processes.\n" \
            "Run it with DCB_BACKEND=postgres (default) or DCB_BACKEND=sqlite."
       return
     end
