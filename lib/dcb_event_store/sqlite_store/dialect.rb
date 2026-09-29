@@ -40,6 +40,12 @@ module DcbEventStore
         "type IN (SELECT value FROM json_each(?))"
       end
 
+      # Matches events whose id is one of +ids+.
+      def id_in(params, ids)
+        params << encode_list(ids)
+        "event_id IN (SELECT value FROM json_each(?))"
+      end
+
       # Matches events carrying all of +tags+, by counting how many of the
       # wanted tags each event has in the index table. The count must be
       # compared against the number of *distinct* tags, so the list is
@@ -73,6 +79,12 @@ module DcbEventStore
       def before_clause(params, before)
         params << before
         "sequence_position < ?"
+      end
+
+      # Matches events stored at or before sequence position +through+.
+      def through_clause(params, through)
+        params << through
+        "sequence_position <= ?"
       end
 
       # One "(...)" row fragment for a multi-row INSERT ... VALUES, appending
@@ -112,7 +124,7 @@ module DcbEventStore
       # default when nil). Takes #import_params.
       def import_sql
         <<~SQL
-          INSERT INTO events (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
+          INSERT INTO #{@events} (event_id, type, data, tags, causation_id, correlation_id, schema_version, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CAST(unixepoch('now', 'subsec') * 1000000 AS INTEGER)))
           ON CONFLICT(event_id) DO NOTHING
           RETURNING sequence_position, created_at

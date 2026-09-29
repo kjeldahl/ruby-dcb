@@ -66,9 +66,12 @@ module DcbEventStore
         event_types: events.map(&:type).uniq,
         condition: !condition.nil?
       ) do |payload|
-        appended = yield
-        payload[:appended_count] = appended.size
-        payload[:last_position] = appended.last&.sequence_position
+        appended = yield payload
+        # A retry answered with the stored events (the store sets
+        # replayed: true, and leaves the key out otherwise) wrote nothing.
+        written = payload.key?(:replayed) ? [] : appended
+        payload[:appended_count] = written.size
+        payload[:last_position] = written.last&.sequence_position
         appended
       end
     end

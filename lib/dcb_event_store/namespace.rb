@@ -86,6 +86,12 @@ module DcbEventStore
       table("events_appended")
     end
 
+    # The PostgreSQL function holding the offset added to transaction ids
+    # in the events table's tx_id column (see PostgresStore::Schema).
+    def tx_offset_function
+      table("events_tx_offset")
+    end
+
     # #lock_offset is added to every advisory-lock key an append in this
     # namespace takes, so appends in different namespaces do not serialize
     # against each other. A crc32 of the name in the high bits, leaving the

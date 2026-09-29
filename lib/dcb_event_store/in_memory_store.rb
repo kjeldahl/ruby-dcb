@@ -43,15 +43,25 @@ module DcbEventStore
       @rows.last&.fetch(:sequence_position)
     end
 
+    # Same contract as SqlStore#append, idempotency by event id included:
+    # every id stored returns the stored events, some raises DuplicateEvent.
     def append(events, condition = nil)
       events = Array(events)
       raise ArgumentError, "append needs at least one event" if events.empty?
 
-      instrument_append(events, condition) do
+      instrument_append(events, condition) do |payload|
+        ids = events.map(&:id).uniq
+        if ids.all? { |id| @ids.include?(id) }
+          payload[:replayed] = true
+          next replay(ids)
+        end
+        reject_stored!(ids)
         raise ConditionNotMet, "conflicting event(s)" if condition && conflicting_events?(condition)
 
+        # No id is stored, so at least the first event is written; a later
+        # one is skipped only when it repeats an id within the batch.
         sequenced = events.filter_map { |event| insert(event) }
-        notify_listeners unless sequenced.empty?
+        notify_listeners
         sequenced
       end
     end
@@ -76,6 +86,20 @@ module DcbEventStore
       deliver(listener, :catch_up)
       @listeners << listener
       nil
+    end
+
+    # Same contract as SqlStore#settled. Single-threaded, so nothing is ever
+    # in flight: the count alone decides.
+    def settled(checks)
+      checks.map do |check|
+        matching = each_matching(check.query, ReadOptions.new(after: check.after))
+        matching.count { |event| event.sequence_position <= check.through } == check.count
+      end
+    end
+
+    # #settled for one check.
+    def settled?(query, after:, through:, count:)
+      settled([SettleCheck.new(query: query, after: after, through: through, count: count)]).first
     end
 
     private
@@ -121,6 +145,17 @@ module DcbEventStore
         row = @rows.fetch(index)
         yield row unless before && row.fetch(:sequence_position) >= before
       end
+    end
+
+    # Some of +ids+ stored (all of them is a replay, handled before).
+    def reject_stored!(ids)
+      stored = ids.select { |id| @ids.include?(id) }
+      raise DuplicateEvent, stored unless stored.empty?
+    end
+
+    # The stored events with these ids, in log order.
+    def replay(ids)
+      @rows.filter_map { |row| row_to_sequenced_event(row) if ids.include?(row.fetch(:event_id)) }
     end
 
     def insert(event, created_at: Time.now, schema_version: 1)

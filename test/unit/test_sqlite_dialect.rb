@@ -36,6 +36,20 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ["x", "y", '["A"]'], params
   end
 
+  # --- id_in ---
+
+  def test_id_in_binds_the_ids_as_json
+    params = []
+    assert_equal "event_id IN (SELECT value FROM json_each(?))", @dialect.id_in(params, %w[id1 id2])
+    assert_equal ['["id1","id2"]'], params
+  end
+
+  def test_id_in_appends_to_the_params_already_collected
+    params = %w[x y]
+    assert_equal "event_id IN (SELECT value FROM json_each(?))", @dialect.id_in(params, ["id1"])
+    assert_equal ["x", "y", '["id1"]'], params
+  end
+
   # --- tags_contain ---
 
   def test_tags_contain_binds_the_list_and_the_number_of_tags
@@ -117,6 +131,14 @@ class TestSqliteDialect < Minitest::Test
     assert_equal ["x", "y", 4], params
   end
 
+  # --- through_clause ---
+
+  def test_through_clause_binds_the_position_inclusively
+    params = %w[x]
+    assert_equal "sequence_position <= ?", @dialect.through_clause(params, 4)
+    assert_equal ["x", 4], params
+  end
+
   # --- insert_row ---
 
   def test_insert_row_is_uncast_and_appends_the_params
@@ -161,6 +183,7 @@ class TestSqliteDialect < Minitest::Test
     dialect = DcbEventStore::SqliteStore::Dialect.new(namespace: "billing")
 
     assert_equal @dialect.insert_sql.sub("INTO events", "INTO billing_events"), dialect.insert_sql
+    assert_equal @dialect.import_sql.sub("INTO events", "INTO billing_events"), dialect.import_sql
     assert_equal "INSERT INTO billing_event_tags (tag, sequence_position) VALUES (?, ?)", dialect.insert_tag_sql
 
     params = []

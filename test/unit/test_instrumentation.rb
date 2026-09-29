@@ -132,6 +132,8 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
     assert_equal 1, payload[:event_count]
     assert_equal 0, payload[:appended_count]
     assert_nil payload[:last_position]
+    assert_equal true, payload[:replayed]
+    assert_nil @events[0].payload[:replayed]
   end
 
   def test_failed_append_condition_emits_event_with_error

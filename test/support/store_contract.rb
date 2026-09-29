@@ -177,64 +177,104 @@ module StoreContract
     end
   end
 
-  def test_duplicate_event_id_silently_skipped
+  # --- idempotent append (issue #49) ---
+
+  def test_reappend_of_stored_ids_returns_the_stored_events
     id = SecureRandom.uuid
-    e1 = DcbEventStore::Event.new(type: "A", id: id)
-    e2 = DcbEventStore::Event.new(type: "A", id: id)
+    first = @store.append([DcbEventStore::Event.new(type: "A", data: {v: 1}, tags: ["t:1"], id: id)])
 
-    r1 = @store.append([e1])
-    assert_equal 1, r1.size
+    again = @store.append([DcbEventStore::Event.new(type: "A", data: {v: 1}, tags: ["t:1"], id: id)])
 
-    r2 = @store.append([e2])
-    assert_equal 0, r2.size
-
-    all = @store.read(DcbEventStore::Query.all).to_a
-    assert_equal 1, all.size
+    assert_equal first.map(&:sequence_position), again.map(&:sequence_position)
+    assert_equal [id], again.map(&:id)
+    assert_equal [{v: 1}], again.map(&:data)
+    assert_equal [["t:1"]], again.map(&:tags)
+    assert_equal 1, @store.read(DcbEventStore::Query.all).count
   end
 
-  def test_duplicate_event_id_with_different_payload_skipped
+  # Ids are all that is compared: a stored id answers with what was stored.
+  def test_reappend_with_a_different_payload_returns_what_was_stored
     id = SecureRandom.uuid
     @store.append([DcbEventStore::Event.new(type: "A", data: {v: 1}, id: id)])
     result = @store.append([DcbEventStore::Event.new(type: "B", data: {v: 2}, id: id)])
 
-    assert_equal 0, result.size
-
-    all = @store.read(DcbEventStore::Query.all).to_a
-    assert_equal 1, all.size
-    assert_equal "A", all[0].type
-    assert_equal({v: 1}, all[0].data)
+    assert_equal ["A"], result.map(&:type)
+    assert_equal [{v: 1}], result.map(&:data)
+    stored = @store.read(DcbEventStore::Query.all).map { |e| [e.type, e.data] }
+    assert_equal [["A", {v: 1}]], stored
   end
 
-  def test_mixed_batch_some_duplicates
+  def test_reappend_returns_stored_events_in_log_order
+    a = DcbEventStore::Event.new(type: "A")
+    b = DcbEventStore::Event.new(type: "B")
+    first = @store.append([a, b])
+
+    assert_equal first.map(&:sequence_position), @store.append([b, a]).map(&:sequence_position)
+  end
+
+  def test_batch_with_some_stored_ids_raises_duplicate_event_and_writes_nothing
     id1 = SecureRandom.uuid
     @store.append([DcbEventStore::Event.new(type: "A", id: id1)])
 
-    id2 = SecureRandom.uuid
     batch = [
       DcbEventStore::Event.new(type: "A", id: id1),
-      DcbEventStore::Event.new(type: "B", id: id2)
+      DcbEventStore::Event.new(type: "B")
     ]
-    result = @store.append(batch)
+    error = assert_raises(DcbEventStore::DuplicateEvent) { @store.append(batch) }
 
-    assert_equal 1, result.size
-    assert_equal "B", result[0].type
-    assert_equal id2, result[0].id
-
-    all = @store.read(DcbEventStore::Query.all).to_a
-    assert_equal 2, all.size
+    assert_equal [id1], error.ids
+    assert_includes error.message, id1
+    assert_equal ["A"], @store.read(DcbEventStore::Query.all).map(&:type)
   end
 
-  def test_idempotent_with_condition
-    e = DcbEventStore::Event.new(type: "A", id: SecureRandom.uuid, tags: ["t:1"])
+  def test_id_repeated_within_one_batch_is_written_once
+    event = DcbEventStore::Event.new(type: "A")
+    result = @store.append([event, event])
 
-    query = DcbEventStore::Query.new([
-                                       DcbEventStore::QueryItem.new(event_types: ["Other"])
-                                     ])
-    condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)
+    assert_equal [event.id], result.map(&:id)
+    assert_equal 1, @store.read(DcbEventStore::Query.all).count
+  end
 
-    @store.append([e], condition)
-    r2 = @store.append([e], condition)
-    assert_equal 0, r2.size
+  # The normal DCB write path: the append committed, the response was lost,
+  # and the retry's condition now matches the retry's own events.
+  def test_conditional_retry_returns_the_stored_events
+    e = DcbEventStore::Event.new(type: "A", tags: ["t:1"])
+    condition = DcbEventStore::AppendCondition.new(
+      fail_if_events_match: DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+    )
+
+    first = @store.append([e], condition)
+    again = @store.append([e], condition)
+
+    assert_equal first.map(&:sequence_position), again.map(&:sequence_position)
+    assert_equal 1, @store.read(DcbEventStore::Query.all).count
+  end
+
+  def test_conditional_retry_ignores_events_appended_since
+    e = DcbEventStore::Event.new(type: "A", tags: ["t:1"])
+    condition = DcbEventStore::AppendCondition.new(
+      fail_if_events_match: DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+    )
+    first = @store.append([e], condition)
+    @store.append([DcbEventStore::Event.new(type: "B", tags: ["t:1"])])
+
+    assert_equal first.map(&:sequence_position), @store.append([e], condition).map(&:sequence_position)
+  end
+
+  def test_conditional_append_with_some_stored_ids_raises_duplicate_event
+    stored = DcbEventStore::Event.new(type: "A", tags: ["t:1"])
+    @store.append([stored])
+    condition = DcbEventStore::AppendCondition.new(
+      fail_if_events_match: DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+    )
+
+    [condition, nil].each do |cond|
+      error = assert_raises(DcbEventStore::DuplicateEvent) do
+        @store.append([stored, stored, DcbEventStore::Event.new(type: "B", tags: ["t:2"])], cond)
+      end
+      assert_equal [stored.id], error.ids
+    end
+    assert_equal 1, @store.read(DcbEventStore::Query.all).count
   end
 
   # --- read ---
@@ -692,5 +732,25 @@ module StoreContract
     last = @store.append([DcbEventStore::Event.new(type: "C", tags: ["t:1"])]).last
 
     assert_equal last.sequence_position, @store.last_position
+  end
+
+  # --- settled? ---
+
+  # With nothing in flight, settled? is a count of the matches in
+  # (after, through]: exact, bounded on both sides, and per query.
+  def test_settled_counts_the_matches_between_after_and_through
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])]) # 1
+    @store.append([DcbEventStore::Event.new(type: "B", tags: ["t:1"])]) # 2
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:2"])]) # 3
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])]) # 4
+    a = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    t1 = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+
+    assert @store.settled?(a, after: nil, through: 3, count: 2)
+    refute @store.settled?(a, after: nil, through: 3, count: 3)
+    assert @store.settled?(a, after: 1, through: 4, count: 2)
+    assert @store.settled?(t1, after: 1, through: 4, count: 2)
+    assert @store.settled?(DcbEventStore::Query.all, after: nil, through: 4, count: 4)
+    assert @store.settled?(t1, after: 4, through: 4, count: 0)
   end
 end
