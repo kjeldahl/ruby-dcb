@@ -46,7 +46,11 @@ jobs:
             echo "$TAG is already tagged, nothing to release."
             exit 0
           fi
+          # Hand-written notes for a version (breaking changes, say) come first.
+          notes=()
+          [ -f ".github/release-notes/$TAG.md" ] && notes=(--notes-file ".github/release-notes/$TAG.md")
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
+            "${notes[@]}" \
             --generate-notes

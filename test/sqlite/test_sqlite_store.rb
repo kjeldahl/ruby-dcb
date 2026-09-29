@@ -93,6 +93,21 @@ class TestSqliteStore < Minitest::Test
     assert_equal [["t:1", 1]], rows
   end
 
+  # Rows written before Event dropped repeated tags keep them. The tag index
+  # holds one row per distinct tag, so the read must still match and hand
+  # back the tags as stored.
+  def test_reads_legacy_row_with_duplicate_tags
+    @db.execute("INSERT INTO events (event_id, type, data, tags, schema_version) VALUES (?, ?, ?, ?, 1)",
+                [SecureRandom.uuid, "A", "{}", '["dup","dup"]'])
+    @db.execute("INSERT INTO event_tags (tag, sequence_position) VALUES ('dup', 1)")
+
+    query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["dup"])])
+    events = @store.read(query).to_a
+
+    assert_equal 1, events.size
+    assert_equal %w[dup dup], events[0].tags
+  end
+
   # --- JSON encoding edge cases ---
   #
   # Tags and type lists travel as JSON arrays and are expanded with json_each,
