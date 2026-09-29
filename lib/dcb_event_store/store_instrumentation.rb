@@ -45,6 +45,10 @@ module DcbEventStore
     # Emitted by DecisionModel::Snapshotting around its snapshot store calls
     # (operation: :load once per build, :write once per snapshot written).
     SNAPSHOT_EVENT = "snapshot.dcb".freeze
+    # Emitted by Namespace when a new name lands on an advisory-lock offset
+    # another name already holds (payload: namespace:, shares_with:,
+    # lock_offset:).
+    NAMESPACE_COLLISION_EVENT = "namespace_collision.dcb".freeze
     SUBSCRIBE_MODES = %i[event batch].freeze
 
     private
@@ -135,13 +139,15 @@ module DcbEventStore
 
     def deliver_per_event(instrumentation, events, query, phase)
       last_position = nil
+      identity = store_identity
       events.each do |event|
         last_position = event.sequence_position
-        payload = store_identity.merge(
+        payload = {
+          **identity,
           query: query, phase: phase,
           sequence_position: event.sequence_position,
           lag: Time.now - event.created_at
-        )
+        }
         instrumentation.instrument(SUBSCRIBE_EVENT, payload) { yield event }
       end
       last_position

@@ -64,19 +64,56 @@ class TestNamespace < Minitest::Test
     assert_equal 0, ns.lock_offset & 0xFFFF_FFFF, "the low 32 bits are the tag's"
   end
 
-  def test_lock_offset_plus_any_tag_key_fits_a_signed_bigint
-    max_tag_key = 0xFFFF_FFFF
-    ["billing", "shipping", "a", "z_9", "a" * Namespace::MAX_NAME_LENGTH].each do |name|
-      key = Namespace.new(name).lock_offset + max_tag_key
+  def test_lock_offset_zero_is_the_default_namespaces_alone
+    Zlib.stub(:crc32, 0) do
+      ns = Namespace.new("zero_hash")
 
-      assert_operator key, :<=, (2**63) - 1, name
-      assert_operator key, :>=, 0, name
+      assert_equal 1 << 32, ns.lock_offset
     end
+    assert_equal 0, Namespace.new.lock_offset
   end
 
-  def test_lock_offset_is_stable_and_differs_between_names
-    assert_equal Namespace.new("billing").lock_offset, Namespace.new("billing").lock_offset
-    refute_equal Namespace.new("billing").lock_offset, Namespace.new("shipping").lock_offset
+  def test_names_sharing_a_lock_offset_publish_a_collision_once_naming_both
+    shared = rand((2**20)..(2**30)) # fresh per run: the registry lives as long as the process
+    events = collect_events do
+      Zlib.stub(:crc32, shared) do
+        Namespace.new("collide_a")
+        Namespace.new("collide_b")
+        Namespace.new("collide_b")
+        Namespace.new("collide_c")
+      end
+    end
+
+    assert_equal ["namespace_collision.dcb"] * 2, events.map(&:name)
+    assert_equal({ namespace: "collide_b", shares_with: ["collide_a"], lock_offset: shared << 32 },
+                 events.first.payload)
+    assert_equal({ namespace: "collide_c", shares_with: %w[collide_a collide_b], lock_offset: shared << 32 },
+                 events.last.payload)
+  end
+
+  def test_distinct_lock_offsets_publish_nothing
+    events = collect_events do
+      Namespace.new("billing")
+      Namespace.new("shipping")
+    end
+
+    assert_empty events
+  end
+
+  def test_offset_registry_is_guarded_by_its_lock
+    lock = Namespace.const_get(:OFFSET_OWNERS_LOCK, false)
+    built = nil
+    lock.synchronize do
+      thread = Thread.new { built = Namespace.new("guarded_by_lock") }
+      sleep 0.05
+
+      assert_nil built, "construction waits for the registry lock"
+      lock.unlock
+      thread.join
+      lock.lock
+    end
+
+    assert_equal "guarded_by_lock", built.name
   end
 
   # --- validation ---
@@ -97,6 +134,24 @@ class TestNamespace < Minitest::Test
 
     assert_includes error.message, too_long.inspect
     assert_includes error.message, "longer than #{Namespace::MAX_NAME_LENGTH}"
+  end
+
+  def test_the_length_limit_keeps_the_sequence_name_within_postgres_63_bytes
+    name = "a" * Namespace::MAX_NAME_LENGTH
+
+    assert_operator "#{name}_events_sequence_position_seq".length, :<=, 63
+    assert_operator "idx_#{name}_events_correlation_id".length, :<=, 63
+    assert_operator "#{name}_projection_snapshots_pkey".length, :<=, 63
+  end
+
+  def test_rejects_names_sqlite_reserves_as_a_table_prefix
+    %w[sqlite sqlite_ sqlite_x].each do |bad|
+      error = assert_raises(ArgumentError, bad) { Namespace.new(bad) }
+
+      assert_includes error.message, bad.inspect
+      assert_includes error.message, "reserved"
+    end
+    %w[sqlitex sqlite2 my_sqlite].each { |ok| assert_equal ok, Namespace.new(ok).name }
   end
 
   def test_longest_name_keeps_every_identifier_under_postgres_limit
@@ -160,5 +215,18 @@ class TestNamespace < Minitest::Test
   def test_inspect_names_the_namespace
     assert_equal "#<DcbEventStore::Namespace billing>", Namespace.new("billing").inspect
     assert_equal "#<DcbEventStore::Namespace default>", Namespace.new.inspect
+  end
+
+  private
+
+  def collect_events
+    events = []
+    previous = DcbEventStore.instrumentation
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    DcbEventStore.instrumentation.subscribe { |event| events << event }
+    yield
+    events
+  ensure
+    DcbEventStore.instrumentation = previous
   end
 end

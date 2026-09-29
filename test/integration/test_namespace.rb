@@ -14,6 +14,7 @@ class TestPostgresNamespace < Minitest::Test
 
   def setup
     setup_db
+    @conn.exec("TRUNCATE projection_snapshots")
     NAMESPACES.each { |name| DcbEventStore::PostgresStore::Schema.drop!(@conn, namespace: name) }
   end
 
@@ -30,6 +31,26 @@ class TestPostgresNamespace < Minitest::Test
   def build_namespaced_snapshot_store(name)
     DcbEventStore::PostgresStore::Schema.create!(@conn, namespace: name)
     DcbEventStore::Snapshots::PostgresSnapshotStore.new(@conn, namespace: name)
+  end
+
+  # Installs racing at boot (one per namespace, each replacing the shared
+  # functions) queue on the install lock instead of failing.
+  def test_installs_racing_on_separate_connections_all_succeed
+    connections = Array.new(8) { PostgresDatabaseHelper.connection }
+    names = Array.new(8) { |i| i.even? ? "billing" : "shipping" }
+    errors = Queue.new
+    threads = connections.zip(names).map do |conn, name|
+      Thread.new do
+        20.times { DcbEventStore::PostgresStore::Schema.create!(conn, namespace: name) }
+      rescue PG::Error => e
+        errors << e
+      end
+    end
+    threads.each(&:join)
+
+    assert_empty Array.new(errors.size) { errors.pop }.map(&:message)
+  ensure
+    connections&.each(&:close)
   end
 
   def test_schema_installs_prefixed_tables_and_indexes

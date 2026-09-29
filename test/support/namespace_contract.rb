@@ -120,8 +120,51 @@ module NamespaceContract
     model = DcbEventStore::DecisionModel.build(billing, snapshots: snapshots, count: projection)
 
     assert_equal 2, model.states[:count]
-    assert_equal 2, snapshots.fetch(projection.snapshot.key(projection.query)).position
-    assert_nil build_namespaced_snapshot_store(nil).fetch(projection.snapshot.key(projection.query))
+    key = projection.snapshot.key(projection.query, namespace: billing.namespace)
+
+    assert_equal 2, snapshots.fetch(key).position
+    assert_nil build_namespaced_snapshot_store(nil).fetch(key)
+  end
+
+  # One snapshot table for two logs (a snapshot store built without the
+  # namespace): the namespace in the key keeps their snapshots apart, where
+  # a bare name/vN/fingerprint key would resume one log from the other's
+  # position.
+  def test_namespaces_sharing_a_snapshot_store_do_not_read_each_others_snapshots
+    billing = build_namespaced_store("billing")
+    shipping = build_namespaced_store("shipping")
+    shared = build_namespaced_snapshot_store(nil)
+    projection = DcbEventStore::Projection.new(
+      query: tagged("course:c1"), initial_state: 0, handlers: { "Sub" => ->(state, _event) { state + 1 } },
+      snapshot: DcbEventStore::Snapshot.new(name: "count", version: 1, every: 1)
+    )
+    billing.append([event("Sub", tags: ["course:c1"]), event("Sub", tags: ["course:c1"])])
+    shipping.append([event("Sub", tags: ["course:c1"])])
+
+    DcbEventStore::DecisionModel.build(billing, snapshots: shared, count: projection)
+    model = DcbEventStore::DecisionModel.build(shipping, snapshots: shared, count: projection)
+
+    assert_equal 1, model.states[:count]
+    assert_equal 1, model.append_condition.after
+    assert_equal 2, shared.fetch(projection.snapshot.key(projection.query, namespace: billing.namespace)).position
+    assert_equal 1, shared.fetch(projection.snapshot.key(projection.query, namespace: shipping.namespace)).position
+  end
+
+  # #purge matches the snapshot store's own namespace's keys, the ones a
+  # DecisionModel built on that namespace's event store writes.
+  def test_purge_removes_the_snapshots_of_the_stores_namespace
+    snapshots = build_namespaced_snapshot_store("billing")
+    v1 = DcbEventStore::Snapshot.new(name: "count", version: 1)
+    v2 = DcbEventStore::Snapshot.new(name: "count", version: 2)
+    query = tagged("course:c1")
+    [v1, v2].each { |snapshot| snapshots.store(snapshot.key(query, namespace: "billing"), position: 1, state: 1) }
+    snapshots.store(v1.key(query), position: 1, state: 1)
+
+    assert_equal 1, snapshots.purge(name: "count", keep_version: 2)
+    assert_nil snapshots.fetch(v1.key(query, namespace: "billing"))
+    refute_nil snapshots.fetch(v2.key(query, namespace: "billing"))
+    refute_nil snapshots.fetch(v1.key(query)), "a key of the default namespace is not this namespace's"
+    assert_equal 1, snapshots.purge(name: "count")
   end
 
   def test_schema_create_is_idempotent_per_namespace

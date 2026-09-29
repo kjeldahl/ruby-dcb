@@ -31,6 +31,10 @@ module DcbEventStore
         $$ LANGUAGE plpgsql;
       SQL
 
+      # Two-integer advisory-lock key (a key space apart from the bigint keys
+      # appends take) that serializes installs, see .create_sql.
+      INSTALL_LOCK_KEY = "1684108385, 1".freeze
+
       def self.create!(conn, namespace: nil)
         conn.exec(create_sql(namespace))
       end
@@ -41,12 +45,18 @@ module DcbEventStore
         conn.exec(drop_sql(namespace))
       end
 
-      # The full DDL for +namespace+ (nil = the default), idempotent.
+      # The full DDL for +namespace+ (nil = the default), idempotent. It
+      # opens with a transaction-scoped advisory lock, held until the script's
+      # transaction ends, so installs racing at boot queue up instead of
+      # failing on the shared functions ("tuple concurrently updated") or on
+      # the tables.
       def self.create_sql(namespace = nil)
         namespace = Namespace.wrap(namespace)
         events = namespace.events_table
         snapshots = namespace.snapshots_table
         <<~SQL
+          SELECT pg_advisory_xact_lock(#{INSTALL_LOCK_KEY});
+
           CREATE TABLE IF NOT EXISTS #{events} (
             sequence_position BIGSERIAL PRIMARY KEY,
             event_id          UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -85,6 +95,11 @@ module DcbEventStore
           DROP TABLE IF EXISTS #{namespace.snapshots_table};
         SQL
       end
+
+      # The default namespace's DDL as constants, from before namespaces.
+      CREATE_SQL = create_sql.freeze
+      DROP_SQL = drop_sql.freeze
+      deprecate_constant :CREATE_SQL, :DROP_SQL
     end
   end
 end

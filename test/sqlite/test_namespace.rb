@@ -32,6 +32,11 @@ class TestSqliteNamespace < Minitest::Test
     DcbEventStore::Snapshots::SqliteSnapshotStore.new(@db, namespace: name)
   end
 
+  def test_sqlite_reserved_names_are_refused_before_any_ddl_runs
+    assert_raises(ArgumentError) { DcbEventStore::SqliteStore::Schema.create!(@db, namespace: "sqlite") }
+    assert_raises(ArgumentError) { DcbEventStore::SqliteStore.new(@db, namespace: "sqlite_x") }
+  end
+
   def test_schema_installs_prefixed_tables_and_triggers
     build_namespaced_store("billing")
 

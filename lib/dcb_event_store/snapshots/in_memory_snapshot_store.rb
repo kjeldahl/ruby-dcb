@@ -51,8 +51,8 @@ module DcbEventStore
       # versions but +keep_version+ (every version when nil). Returns how
       # many were removed.
       def purge(name:, keep_version: nil)
-        prefix = Snapshot.key_prefix(name, nil)
-        keep = keep_version && Snapshot.key_prefix(name, keep_version)
+        prefix = Snapshot.key_prefix(name, nil, namespace: @namespace)
+        keep = keep_version && Snapshot.key_prefix(name, keep_version, namespace: @namespace)
         delete_where { |key| key.start_with?(prefix) && !(keep && key.start_with?(keep)) }
       end
 

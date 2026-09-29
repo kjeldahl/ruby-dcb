@@ -95,6 +95,11 @@ module DcbEventStore
       end
       private_class_method :append_only_triggers
 
+      # The default namespace's DDL as constants, from before namespaces.
+      CREATE_SQL = create_sql.freeze
+      DROP_SQL = drop_sql.freeze
+      deprecate_constant :CREATE_SQL, :DROP_SQL
+
       # Connection settings the store relies on: WAL so readers never block
       # the single writer, enforced foreign keys, a busy timeout so a
       # connection waiting for the write lock retries instead of failing

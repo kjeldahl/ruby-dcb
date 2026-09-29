@@ -167,6 +167,21 @@ class TestSnapshot < Minitest::Test
     assert_equal "rel-7/count/", DcbEventStore::Snapshot.key_prefix("count", nil)
   end
 
+  def test_namespace_is_part_of_the_key_and_the_prefixes
+    snapshot = DcbEventStore::Snapshot.new(name: "count", version: 3)
+
+    assert_equal "billing/count/v3/[]", snapshot.key(DcbEventStore::Query.all, namespace: "billing")
+    assert_equal "billing/count/v3/[]",
+                 snapshot.key(DcbEventStore::Query.all, namespace: DcbEventStore::Namespace.new("billing"))
+    assert_equal "count/v3/[]", snapshot.key(DcbEventStore::Query.all, namespace: nil)
+    assert_equal "billing/count/", DcbEventStore::Snapshot.key_prefix("count", nil, namespace: "billing")
+    assert_equal "billing/count/v2/", DcbEventStore::Snapshot.key_prefix("count", 2, namespace: "billing")
+
+    DcbEventStore::Snapshots.epoch = "rel-7"
+    assert_equal "rel-7/billing/count/v3/[]", snapshot.key(DcbEventStore::Query.all, namespace: "billing")
+    assert_equal "rel-7/", DcbEventStore::Snapshot.epoch_prefix
+  end
+
   def test_every_key_starts_with_its_prefixes
     DcbEventStore::Snapshots.epoch = "rel-7"
     key = DcbEventStore::Snapshot.new(name: "count", version: 3).key(query)

@@ -14,15 +14,23 @@ module DcbEventStore
   # Names go straight into SQL identifiers, which cannot be bound as
   # parameters, hence the strict pattern: lowercase letters, digits and
   # underscores, starting with a letter. The length keeps every derived
-  # identifier under PostgreSQL's 63-byte limit.
+  # identifier under PostgreSQL's 63-byte limit, and "sqlite" is refused as
+  # a name (or its "sqlite_" prefix) because SQLite reserves table names
+  # starting with "sqlite_": one rule on every backend, so a name valid
+  # here is valid everywhere.
   #
   # Pure: a value, comparable by name.
   class Namespace
     NAME_PATTERN = /\A[a-z][a-z0-9_]*\z/
-    # The longest identifier derived from a name is the PostgreSQL index
-    # "idx_<name>_events_correlation_id" (26 characters around the name), and
-    # PostgreSQL truncates identifiers past 63 bytes: 63 - 26.
-    MAX_NAME_LENGTH = 37
+    # The longest identifier derived from a name is the sequence PostgreSQL
+    # names for the events table's BIGSERIAL column,
+    # "<name>_events_sequence_position_seq" (29 characters around the name),
+    # and PostgreSQL truncates identifiers past 63 bytes: 63 - 29. (The
+    # longest index, "idx_<name>_events_correlation_id", is 26 around it.)
+    MAX_NAME_LENGTH = 34
+    # Names SQLite would refuse as a table prefix: "sqlite_events" and
+    # "sqlite_x_events" both begin with the reserved "sqlite_".
+    RESERVED_PATTERN = /\Asqlite(_|\z)/
 
     # Bits an advisory-lock key's namespace part is shifted by, leaving the
     # low 32 bits to the tag's crc32 (see PostgresStore::LockKeys).
@@ -31,7 +39,13 @@ module DcbEventStore
     # positive signed bigint.
     LOCK_OFFSET_MASK = 0x7FFF_FFFF
 
-    attr_reader :name
+    # Namespaces built so far by lock offset, to notice two names sharing
+    # one (see #lock_offset).
+    OFFSET_OWNERS = Hash.new { |hash, offset| hash[offset] = [] }
+    OFFSET_OWNERS_LOCK = Mutex.new
+    private_constant :OFFSET_OWNERS, :OFFSET_OWNERS_LOCK
+
+    attr_reader :name, :lock_offset
 
     # The Namespace for +value+: a Namespace as it is, nil the default,
     # anything else its string form validated as a name.
@@ -41,6 +55,7 @@ module DcbEventStore
 
     def initialize(name = nil)
       @name = validate(name)
+      @lock_offset = compute_lock_offset
       freeze
     end
 
@@ -71,14 +86,18 @@ module DcbEventStore
       table("events_appended")
     end
 
-    # Added to every advisory-lock key an append in this namespace takes, so
-    # appends in different namespaces never serialize against each other. A
-    # crc32 of the name in the high bits, leaving the tag's crc32 the low 32;
-    # zero in the default namespace (the crc32 of the empty string), which
-    # keeps its keys as they were.
-    def lock_offset
-      (Zlib.crc32(to_s) & LOCK_OFFSET_MASK) << LOCK_OFFSET_SHIFT
-    end
+    # #lock_offset is added to every advisory-lock key an append in this
+    # namespace takes, so appends in different namespaces do not serialize
+    # against each other. A crc32 of the name in the high bits, leaving the
+    # tag's crc32 the low 32; zero is the default namespace's alone (keeping
+    # its keys as they were), so a name that hashes to zero takes 1.
+    #
+    # 31 bits do not tell every name apart: two names may share an offset,
+    # which only makes their appends serialize against each other (never a
+    # missed conflict). The first time a name lands on an offset another
+    # already holds, a "namespace_collision.dcb" event names both (published
+    # through DcbEventStore.instrumentation, so it reaches whatever logging
+    # or metrics the application subscribed).
 
     def ==(other)
       other.is_a?(Namespace) && other.name == @name
@@ -97,6 +116,33 @@ module DcbEventStore
       default? ? "#<DcbEventStore::Namespace default>" : "#<DcbEventStore::Namespace #{@name}>"
     end
 
+    def compute_lock_offset
+      return 0 if default?
+
+      slot = Zlib.crc32(@name) & LOCK_OFFSET_MASK
+      slot = 1 if slot.zero?
+      offset = slot << LOCK_OFFSET_SHIFT
+      warn_on_shared_offset(offset)
+      offset
+    end
+    private :compute_lock_offset
+
+    def warn_on_shared_offset(offset)
+      others = OFFSET_OWNERS_LOCK.synchronize do
+        owners = OFFSET_OWNERS[offset]
+        if owners.include?(@name)
+          []
+        else
+          owners.dup.tap { owners << @name }
+        end
+      end
+      return if others.empty?
+
+      payload = { namespace: @name, shares_with: others, lock_offset: offset }
+      DcbEventStore.instrumentation.instrument(StoreInstrumentation::NAMESPACE_COLLISION_EVENT, payload, &:itself)
+    end
+    private :warn_on_shared_offset
+
     def validate(name)
       return nil if name.nil?
 
@@ -107,6 +153,10 @@ module DcbEventStore
       end
       if name.length > MAX_NAME_LENGTH
         raise ArgumentError, "namespace #{name.inspect} is longer than #{MAX_NAME_LENGTH} characters"
+      end
+
+      if RESERVED_PATTERN.match?(name)
+        raise ArgumentError, "namespace #{name.inspect} is reserved: SQLite reserves table names starting with sqlite_"
       end
 
       name.freeze

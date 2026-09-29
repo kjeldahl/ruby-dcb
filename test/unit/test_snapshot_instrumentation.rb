@@ -78,6 +78,39 @@ class TestSnapshotInstrumentation < Minitest::Test
     assert_equal [nil, nil], snapshot_payload_values(:namespace)
   end
 
+  # A custom snapshot store may answer #namespace with a bare name or nil.
+  def test_a_snapshot_store_answering_a_bare_namespace_name_is_wrapped
+    @store.append([inc("t:a")])
+    @snapshots = Class.new(DcbEventStore::Snapshots::InMemorySnapshotStore) { def namespace = "billing" }.new
+    build(a: counter("t:a"))
+
+    assert_equal %w[billing billing], snapshot_payload_values(:namespace)
+
+    @events.clear
+    @snapshots = Class.new(DcbEventStore::Snapshots::InMemorySnapshotStore) { def namespace = nil }.new
+    build(a: counter("t:a"))
+
+    assert_equal [nil, nil], snapshot_payload_values(:namespace)
+  end
+
+  # The snapshot key carries the event store's namespace, whatever the
+  # snapshot store's own.
+  def test_snapshot_keys_carry_the_event_stores_namespace
+    @store = DcbEventStore::InMemoryStore.new(namespace: "billing")
+    @store.append([inc("t:a")])
+    build(a: counter("t:a"))
+
+    key = "billing/counter/v1/#{counter('t:a').query.fingerprint}"
+
+    assert_equal [key], snapshot_payload_values(:key).compact
+    refute_nil @snapshots.fetch(key)
+
+    @events.clear
+    build(a: counter("t:a"))
+
+    assert_equal([1], named("snapshot.dcb").filter_map { |e| e.payload[:loaded] })
+  end
+
   def test_load_counts_only_the_snapshots_that_exist
     @store.append([inc("t:a")])
     build(a: counter("t:a"))

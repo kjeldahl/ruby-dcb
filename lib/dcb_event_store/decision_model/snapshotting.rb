@@ -8,10 +8,12 @@ module DcbEventStore
       # configured and stored; one round trip to the snapshot store, published
       # as one "snapshot.dcb" event (operation: :load) with how many snapshots
       # were asked for and how many existed.
-      def self.load(snapshots, projections)
+      def self.load(snapshots, projections, namespace)
         return {} unless snapshots
 
-        keys = projections.filter_map { |name, proj| [name, proj.snapshot.key(proj.query)] if proj.snapshot }
+        keys = projections.filter_map do |name, proj|
+          [name, proj.snapshot.key(proj.query, namespace: namespace)] if proj.snapshot
+        end
         return {} if keys.empty?
 
         payload = identity(snapshots).merge(operation: :load, projections: keys.map(&:first),
@@ -38,14 +40,15 @@ module DcbEventStore
       # write is one "snapshot.dcb" event (operation: :write) naming the
       # projection, the key, the position and how many events were folded
       # on top of the previous snapshot.
-      def self.store(snapshots, projections, folded)
+      def self.store(snapshots, projections, folded, namespace)
         due = projections.select do |name, proj|
           due?(proj.snapshot, folded.entries[name], folded.positions.fetch(name))
         end
         due.each do |name, proj|
           position = folded.positions.fetch(name)
           payload = identity(snapshots).merge(operation: :write, projection: name,
-                                              key: proj.snapshot.key(proj.query), position: position,
+                                              key: proj.snapshot.key(proj.query, namespace: namespace),
+                                              position: position,
                                               folded_count: folded.events_by_projection.fetch(name).size)
           DcbEventStore.instrumentation.instrument(StoreInstrumentation::SNAPSHOT_EVENT, payload) do
             state = proj.snapshot.dump(folded.states.fetch(name))
@@ -59,8 +62,13 @@ module DcbEventStore
       # snapshot store's class and its namespace name (nil in the default
       # namespace, and for a snapshot store that has no notion of one).
       def self.identity(snapshots)
-        namespace = snapshots.namespace.name if snapshots.respond_to?(:namespace)
-        { store: snapshots.class.name, namespace: namespace }
+        { store: snapshots.class.name, namespace: namespace_of(snapshots).name }
+      end
+
+      # The Namespace of a store or snapshot store; the default one when it
+      # has no #namespace, or answers with a bare name (or nil).
+      def self.namespace_of(store)
+        store.respond_to?(:namespace) ? Namespace.wrap(store.namespace) : Namespace::DEFAULT
       end
 
       # A snapshot is due when the projection has none yet (and its read

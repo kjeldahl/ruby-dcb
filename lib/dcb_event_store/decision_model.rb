@@ -44,7 +44,8 @@ module DcbEventStore
     def self.build(store, snapshots: nil, **projections)
       DcbEventStore.instrumentation.instrument(EVENT, projections: projections.keys) do |payload|
         bound = store.last_position.to_i if snapshots
-        entries = Snapshotting.load(snapshots, projections)
+        namespace = Snapshotting.namespace_of(store)
+        entries = Snapshotting.load(snapshots, projections, namespace)
         groups = read_groups(store, projections, entries, bound)
         events = merge_reads(groups)
         folded = fold(projections, events, groups, entries)
@@ -53,7 +54,7 @@ module DcbEventStore
         payload[:last_position] = folded.max_position
         if snapshots
           payload[:snapshots_loaded] = entries.size
-          payload[:snapshots_written] = Snapshotting.store(snapshots, projections, folded)
+          payload[:snapshots_written] = Snapshotting.store(snapshots, projections, folded, namespace)
         end
 
         condition = AppendCondition.new(fail_if_events_match: combined(projections), after: folded.max_position)

@@ -67,12 +67,12 @@ module DcbEventStore
       # compared with substr rather than LIKE, so a name may contain any
       # character. Returns how many rows were removed.
       def purge(name:, keep_version: nil)
-        prefix = Snapshot.key_prefix(name, nil)
+        prefix = Snapshot.key_prefix(name, nil, namespace: @namespace)
         if keep_version
           @conn.exec_params(
             "DELETE FROM #{@table} WHERE substr(key, 1, length($1)) = $1 " \
             "AND substr(key, 1, length($2)) <> $2",
-            [prefix, Snapshot.key_prefix(name, keep_version)]
+            [prefix, Snapshot.key_prefix(name, keep_version, namespace: @namespace)]
           ).cmd_tuples
         else
           @conn.exec_params("DELETE FROM #{@table} WHERE substr(key, 1, length($1)) = $1", [prefix])
