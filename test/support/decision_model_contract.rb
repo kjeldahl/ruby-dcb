@@ -279,6 +279,56 @@ module DecisionModelContract
     assert_equal 1, result.states[:tagged]
   end
 
+  # DecisionModel.decide (issue #52): a rival subscription lands between the
+  # build and the append, so the first append's condition fails on the real
+  # store and the retry decides again on the state that includes it.
+  def test_decide_retries_a_conflict_on_fresh_state
+    @store.append([DcbEventStore::Event.new(type: "CourseDefined", data: {capacity: 2}, tags: ["course:c1"])])
+    rival = true
+    seen = []
+
+    projections = { capacity: capacity_projection("course:c1"),
+                    subscriptions: subscription_count_projection("course:c1") }
+    appended = DcbEventStore::DecisionModel.decide(@store, backoff: nil, **projections) do |states|
+      seen << states[:subscriptions]
+      if rival
+        rival = false
+        @store.append([DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["course:c1", "student:rival"])])
+      end
+      raise "full" if states[:subscriptions] >= states[:capacity]
+
+      [DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["course:c1", "student:s1"])]
+    end
+
+    assert_equal [0, 1], seen
+    assert_equal [["course:c1", "student:s1"]], appended.map(&:tags)
+    assert_equal 3, @store.read(DcbEventStore::Query.all).count
+
+    error = assert_raises(RuntimeError) do
+      DcbEventStore::DecisionModel.decide(@store, subscriptions: subscription_count_projection("course:c1"),
+                                                  capacity: capacity_projection("course:c1")) do |states|
+        raise "full" if states[:subscriptions] >= states[:capacity]
+
+        [DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["course:c1", "student:s2"])]
+      end
+    end
+    assert_equal "full", error.message
+  end
+
+  def test_decide_out_of_retries_raises_condition_not_met
+    attempts = 0
+
+    assert_raises(DcbEventStore::ConditionNotMet) do
+      DcbEventStore::DecisionModel.decide(@store, retries: 1, backoff: nil, count: counter_projection("counter:a")) do
+        attempts += 1
+        @store.append([DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])])
+        [DcbEventStore::Event.new(type: "Increment", tags: ["counter:a"])]
+      end
+    end
+    assert_equal 2, attempts
+    assert_equal 2, @store.read(DcbEventStore::Query.all).count
+  end
+
   private
 
   def build_projection(type, tag, initial: 0, &handler)

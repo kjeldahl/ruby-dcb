@@ -9,6 +9,7 @@ module DcbEventStore
   #   dcb.subscribe.delivered    counter            deliveries, tagged by phase
   #   dcb.subscribe.lag          distribution (ms)  live delivery lag
   #   dcb.decision_model.events  distribution       events read per build
+  #   dcb.decide.retries         counter            builds a decide repeated after ConditionNotMet
   #   dcb.snapshot.hits          counter            snapshots found on load
   #   dcb.snapshot.misses        counter            snapshots asked for but missing
   #   dcb.snapshot.writes        counter            snapshots written
@@ -66,6 +67,7 @@ module DcbEventStore
       when StoreInstrumentation::SUBSCRIBE_EVENT then record_subscribe(event, tags)
       when StoreInstrumentation::SNAPSHOT_EVENT then record_snapshot(event, tags)
       when DecisionModel::EVENT then record_decision_model(event)
+      when DecisionModel::DECIDE_EVENT then record_decide(event)
       end
     end
 
@@ -120,6 +122,13 @@ module DcbEventStore
     def record_decision_model(event)
       count = event.payload[:event_count]
       appsignal.add_distribution_value(metric("decision_model", "events"), count) if count
+    end
+
+    # Like decision_model.dcb, decide.dcb carries no store:. Counted on
+    # failure too: a decide that ran out of retries retried all the same.
+    def record_decide(event)
+      attempts = event.payload[:attempts] or return
+      counter(metric("decide", "retries"), attempts - 1, {})
     end
 
     # A failed load or write reports nothing but the error counter: the
