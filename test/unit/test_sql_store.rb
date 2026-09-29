@@ -117,6 +117,7 @@ class TestSqlStore < Minitest::Test
     refute_implemented(:with_write_transaction)
     refute_implemented(:acquire_locks!, [], nil)
     refute_implemented(:count_matching, DcbEventStore::Query.all, nil)
+    refute_implemented(:count_between, DcbEventStore::Query.all, nil, 1)
     refute_implemented(:insert_event, event)
     refute_implemented(:lock_for_import!)
     refute_implemented(:import_event, event)

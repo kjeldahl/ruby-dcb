@@ -88,6 +88,33 @@ class TestPostgresDialect < Minitest::Test
     assert_equal ["x", "y", 4], params
   end
 
+  # --- commit order ---
+
+  def test_commit_cursor_clause_binds_both_halves_of_the_cursor
+    params = %w[x]
+    assert_equal "(tx_id, sequence_position) > ($2::bigint, $3::bigint)", @dialect.commit_cursor_clause(params, [40, 7])
+    assert_equal ["x", 40, 7], params
+  end
+
+  def test_settled_clause_offsets_the_watermark_by_the_namespace
+    assert_equal "tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint + events_tx_offset()",
+                 @dialect.settled_clause
+    assert_equal "tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint + billing_events_tx_offset()",
+                 DcbEventStore::PostgresStore::Dialect.new(namespace: "billing").settled_clause
+  end
+
+  def test_commit_order
+    assert_equal "tx_id, sequence_position", @dialect.commit_order
+  end
+
+  # --- through_clause ---
+
+  def test_through_clause_binds_the_position_inclusively
+    params = %w[x]
+    assert_equal "sequence_position <= $2", @dialect.through_clause(params, 4)
+    assert_equal ["x", 4], params
+  end
+
   # --- insert_row ---
 
   def test_insert_row_casts_every_column_and_appends_the_params

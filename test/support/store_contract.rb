@@ -609,4 +609,24 @@ module StoreContract
 
     assert_equal last.sequence_position, @store.last_position
   end
+
+  # --- settled? ---
+
+  # With nothing in flight, settled? is a count of the matches in
+  # (after, through]: exact, bounded on both sides, and per query.
+  def test_settled_counts_the_matches_between_after_and_through
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])]) # 1
+    @store.append([DcbEventStore::Event.new(type: "B", tags: ["t:1"])]) # 2
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:2"])]) # 3
+    @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])]) # 4
+    a = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    t1 = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: [], tags: ["t:1"])])
+
+    assert @store.settled?(a, after: nil, through: 3, count: 2)
+    refute @store.settled?(a, after: nil, through: 3, count: 3)
+    assert @store.settled?(a, after: 1, through: 4, count: 2)
+    assert @store.settled?(t1, after: 1, through: 4, count: 2)
+    assert @store.settled?(DcbEventStore::Query.all, after: nil, through: 4, count: 4)
+    assert @store.settled?(t1, after: 4, through: 4, count: 0)
+  end
 end

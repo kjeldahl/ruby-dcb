@@ -69,6 +69,11 @@ module DcbEventStore
       @db.get_first_value(sql, params).to_i
     end
 
+    def count_between(query, after, through)
+      sql, params = @sql.count_between_sql(query, after, through)
+      @db.get_first_value(sql, params).to_i
+    end
+
     def insert_event(event)
       insert_with_tags(event, @dialect.insert_sql, @dialect.insert_params(event))
     end

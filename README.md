@@ -8,7 +8,7 @@ DCB is an alternative to stream-based event stores. Instead of partitioning even
 
 - Ruby >= 3.3
 - A driver for the backend you use, added to **your** Gemfile — the gem depends on neither:
-  - [`pg`](https://rubygems.org/gems/pg) for PostgreSQL (`PostgresStore`)
+  - [`pg`](https://rubygems.org/gems/pg) for PostgreSQL (`PostgresStore`), PostgreSQL >= 13 (`xid8`)
   - [`sqlite3`](https://rubygems.org/gems/sqlite3) >= 2.0 for SQLite (`SqliteStore`), which bundles SQLite >= 3.45; SQLite >= 3.35 is the minimum (`RETURNING`)
 
 Each backend file loads its driver lazily, so an application that only uses one never needs the other installed. The backend classes and their collaborators are themselves loaded on first reference, so an application only loads the backend it constructs.
@@ -32,6 +32,10 @@ createdb my_event_store
 conn = PG.connect(dbname: "my_event_store")
 DcbEventStore::PostgresStore::Schema.create!(conn)
 ```
+
+`create!` is idempotent and also upgrades: on an `events` table from 0.5.0 or earlier it adds the `tx_id` column subscriptions order by (see [Real-time subscriptions](#real-time-subscriptions)). The column's default is non-volatile, so adding it does not rewrite the table; it takes a brief exclusive lock.
+
+After restoring a dump (or copying rows by logical replication) into another cluster, run `create!` again before appending. `tx_id` holds the writing cluster's transaction ids, and a cluster whose counter is behind them would treat the restored rows as still in flight and sort new appends before them. `create!` spots rows past any id this cluster could have written and raises the namespace's tx_id offset (the `events_tx_offset()` function) past them. No row is rewritten. `pg_upgrade` and physical replicas keep the counter, so they need nothing. `EventFile` export/import is unaffected either way, since it assigns fresh ids.
 
 SQLite needs no setup beyond a path — `create!` installs the schema and the connection pragmas (WAL, busy handler) the store expects:
 
@@ -75,7 +79,8 @@ Both backends implement the same API and pass the same contract suite; the diffe
 | | `PostgresStore` | `SqliteStore` |
 |---|-----------------|---------------|
 | append serialization | per-tag advisory locks on the tags written and the tags the condition names — appends to disjoint tags run in parallel | one writer database-wide (`BEGIN IMMEDIATE`) |
-| subscribe wake-up | `LISTEN/NOTIFY`, no polling | polls `PRAGMA data_version` every `poll_interval:` (default 0.1s) |
+| subscribe wake-up | `LISTEN/NOTIFY`; polls every 0.1s only while held back by an unfinished transaction | polls `PRAGMA data_version` every `poll_interval:` (default 0.1s) |
+| subscribe order | commit order (`tx_id`, then position): positions ascend per tag, not across the log | position order |
 | `created_at` precision | microseconds | milliseconds |
 | tag lookup | GIN index on the `tags` column | `event_tags(tag, sequence_position)` index table |
 | in-memory database | n/a | `:memory:` belongs to the connection that opened it — use a file database for anything multi-connection, including `subscribe` |
@@ -214,7 +219,7 @@ result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots,
 - `DecisionModel.build` groups projections by snapshot position and issues one read per group (projections without a snapshot read from the start of the log, but only their own query), so a projection over a brand-new entity does not force the others to replay.
 - State is stored as JSON by the SQL stores, so JSON-compatible states (numbers, strings, booleans, arrays, symbol-keyed hashes) round-trip as they are; anything else takes `dump:`/`load:` lambdas on the `Snapshot`.
 - `Snapshots::InMemorySnapshotStore` keeps the states in the process (a warm cache, lost on restart). It stores the very objects the fold produced, so handlers that mutate their state in place need `dump: Marshal.method(:dump), load: Marshal.method(:load)` or must return new objects.
-- Snapshots keep the DCB guarantees only as far as a read does: a snapshot position means "every matching event up to here was visible when it was read", which holds on SQLite and `InMemoryStore` (single writer, positions commit in order) and on PostgreSQL under the same per-tag locking that already protects the append condition.
+- A snapshot position means "every matching event up to here has been folded, for good". A read alone vouches for that on SQLite and `InMemoryStore` (single writer, positions commit in order), and on PostgreSQL when every matching event shares one tag, whose lock orders them. It does not for a type-only query or items on different tags: a position is taken at INSERT and becomes visible at COMMIT, so a lower-position match can still be in flight when the build reads. So before writing, the build asks the store (`settled`, one call for all due snapshots): PostgreSQL takes the advisory locks a condition on the query would take, waiting at most 50ms (`PostgresStore::SETTLE_LOCK_TIMEOUT`) so an append in flight can commit, then recounts the matches up to the new position against what was folded. If a lock is not free in time, or the count differs, the snapshot is skipped and a later build writes it. While a type-only check waits for the global key, new appends queue behind it for at most that long. The state the build returns is unaffected either way.
 - On PostgreSQL, keep `autovacuum_analyze_scale_factor` low on the `events` table (e.g. `0.01`): with stale statistics the planner walks the primary key for the catch-up read, and the walk grows with everything appended since the snapshot. `examples/SNAPSHOTS.md` §3.1 has the measurements.
 
 ### Client (causation/correlation wiring)
@@ -254,6 +259,10 @@ end
 ```
 
 Uses PostgreSQL `LISTEN/NOTIFY` with catch-up reads.
+
+On PostgreSQL events are delivered in **commit order**, not strictly by position. A position is taken at INSERT and becomes visible at COMMIT, and appends on disjoint tags take no common lock, so position 1 can commit after position 2. A subscriber tailing by position would step past 1 for good. So each event also stores its transaction id (`tx_id`), and the subscription walks `(tx_id, sequence_position)`, delivering only events whose transaction is older than the oldest one still running. Nothing can later appear behind it. Positions still ascend per tag (an append takes its tag's lock before it gets a transaction id) and within one append. The cost is that a long-running write transaction anywhere on the server holds subscribers back until it ends; while held back, a subscriber polls every 0.1s, since that transaction need not be an append that NOTIFYs. Measured on 200k events, a catch-up in commit order costs the same as a read in position order, within 10%.
+
+`after:` is still a position: the subscription resumes behind the event at that position in commit order. Pass the position of the last event the subscription delivered. A position taken from `read` works too, but can redeliver events committed out of order around it (at least once, never lost).
 
 On SQLite there is no `LISTEN/NOTIFY`, so the same call polls: it sleeps `poll_interval:` (default 0.1s) and only reads again once the database changed.
 

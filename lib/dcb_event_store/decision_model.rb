@@ -38,9 +38,11 @@ module DcbEventStore
     # them. Within that bound a group is known to have covered its queries
     # up to the last event it read (matching events on a tag are committed
     # in order, which is what the append condition relies on too), so that
-    # is where its snapshots are written and what the condition guards; the
-    # log head itself is not, since on PostgreSQL it can lie past an
-    # uncommitted append on the very tag being decided about.
+    # is what the condition guards and where its snapshots are written, once
+    # the store vouches that no match below it is still in flight (see
+    # Snapshotting.settled?); the log head itself is not, since on
+    # PostgreSQL it can lie past an uncommitted append on the very tag being
+    # decided about.
     def self.build(store, snapshots: nil, **projections)
       DcbEventStore.instrumentation.instrument(EVENT, projections: projections.keys) do |payload|
         bound = store.last_position.to_i if snapshots
@@ -54,7 +56,7 @@ module DcbEventStore
         payload[:last_position] = folded.max_position
         if snapshots
           payload[:snapshots_loaded] = entries.size
-          payload[:snapshots_written] = Snapshotting.store(snapshots, projections, folded, namespace)
+          payload[:snapshots_written] = Snapshotting.store(snapshots, projections, folded, namespace, store)
         end
 
         condition = AppendCondition.new(fail_if_events_match: combined(projections), after: folded.max_position)

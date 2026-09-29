@@ -162,4 +162,96 @@ class TestDecisionModelUnit < Minitest::Test
     assert_equal 0, result.states[:p]
     assert_nil result.append_condition.after
   end
+
+  def snapshotted(name, query_item, every: 1)
+    DcbEventStore::Projection.new(initial_state: 0, handlers: { "A" => ->(s, _e) { s + 1 } },
+                                  query: DcbEventStore::Query.new([query_item]),
+                                  snapshot: DcbEventStore::Snapshot.new(name: name, version: 1, every: every))
+  end
+
+  # Delegates reads to the store and answers every settle check with
+  # +settled+, recording what each call asked.
+  def settling(store, settled)
+    calls = []
+    duck = Object.new
+    duck.define_singleton_method(:last_position) { store.last_position }
+    duck.define_singleton_method(:read) { |query| store.read(query) }
+    duck.define_singleton_method(:read_from) { |query, after:| store.read_from(query, after: after) }
+    duck.define_singleton_method(:settled) do |checks|
+      calls << checks.map { |c| [c.query, c.after, c.through, c.count] }
+      checks.map { settled }
+    end
+    [duck, calls]
+  end
+
+  # A due snapshot is written only once the event store vouches that what
+  # the build folded is every match up to it (issue #55), asked with the
+  # projection's query, its old snapshot position, the new one and how
+  # many events were folded in between.
+  def test_a_snapshot_the_store_does_not_settle_is_not_written
+    proj = snapshotted("a", DcbEventStore::QueryItem.new(event_types: ["A"]))
+    snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new
+    key = proj.snapshot.key(proj.query)
+    snapshots.store(key, position: 1, state: 1)
+    3.times { @store.append([DcbEventStore::Event.new(type: "A")]) }
+    store, calls = settling(@store, false)
+
+    result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots, p: proj)
+
+    assert_equal 3, result.states[:p]
+    assert_equal 1, snapshots.fetch(key).position
+    assert_equal [[[proj.query, 1, 3, 2]]], calls
+  end
+
+  def test_a_snapshot_the_store_settles_is_written
+    proj = snapshotted("a", DcbEventStore::QueryItem.new(event_types: ["A"]))
+    snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new
+    @store.append([DcbEventStore::Event.new(type: "A")])
+    store, calls = settling(@store, true)
+
+    DcbEventStore::DecisionModel.build(store, snapshots: snapshots, p: proj)
+
+    assert_equal 1, snapshots.fetch(proj.snapshot.key(proj.query)).position
+    assert_equal [[[proj.query, nil, 1, 1]]], calls
+  end
+
+  # Only due snapshots are checked.
+  def test_a_snapshot_that_is_not_due_is_not_checked
+    proj = snapshotted("a", DcbEventStore::QueryItem.new(event_types: ["A"]), every: 5)
+    snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new
+    snapshots.store(proj.snapshot.key(proj.query), position: 1, state: 1)
+    2.times { @store.append([DcbEventStore::Event.new(type: "A")]) }
+    store, calls = settling(@store, true)
+
+    DcbEventStore::DecisionModel.build(store, snapshots: snapshots, p: proj)
+
+    assert_empty calls
+  end
+
+  # A projection can fold an event past the position its own read covered:
+  # another group's read, issued later, returned it. Its state then holds
+  # more than a snapshot at that position may, so none is written, whatever
+  # the store would say.
+  def test_a_snapshot_is_not_written_below_an_event_it_folded
+    a = snapshotted("a", DcbEventStore::QueryItem.new(event_types: ["A"], tags: ["t:1"]))
+    all_a = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["A"])])
+    b = DcbEventStore::Projection.new(initial_state: 0, handlers: {}, query: all_a)
+    snapshots = DcbEventStore::Snapshots::InMemorySnapshotStore.new
+    key = a.snapshot.key(a.query)
+    snapshots.store(key, position: 1, state: 1)
+    3.times { @store.append([DcbEventStore::Event.new(type: "A", tags: ["t:1"])]) }
+    store, calls = settling(@store, true)
+    inner = @store
+    # a's read (after its snapshot) misses position 3, which b's whole-log
+    # read returns.
+    store.define_singleton_method(:read_from) do |query, after:|
+      inner.read_from(query, after: after).reject { |e| e.sequence_position == 3 }
+    end
+
+    result = DcbEventStore::DecisionModel.build(store, snapshots: snapshots, a: a, b: b)
+
+    assert_equal 3, result.states[:a]
+    assert_equal 1, snapshots.fetch(key).position
+    assert_empty calls
+  end
 end
