@@ -44,7 +44,7 @@ module DcbEventStore
       DcbEventStore.instrumentation.instrument(DECIDE_EVENT, projections: projections.keys) do |payload|
         (1..).each do |attempt|
           payload[:attempts] = attempt
-          result = build_model(store, snapshots, projections, { attempt: attempt })
+          result = build_model(store, snapshots, projections, attempt: attempt)
           events = Array(yield(result.states))
           appended = append_unless_conflict(store, events, result.append_condition, attempt <= retries)
           if appended

@@ -44,12 +44,12 @@ module DcbEventStore
     # PostgreSQL it can lie past an uncommitted append on the very tag being
     # decided about.
     def self.build(store, snapshots: nil, **projections)
-      build_model(store, snapshots, projections, {})
+      build_model(store, snapshots, projections)
     end
 
     # build, with +extra+ merged into the "decision_model.dcb" payload after
     # the projection names (DecisionModel.decide adds attempt:).
-    def self.build_model(store, snapshots, projections, extra)
+    def self.build_model(store, snapshots, projections, **extra)
       DcbEventStore.instrumentation.instrument(EVENT, { projections: projections.keys, **extra }) do |payload|
         bound = store.last_position.to_i if snapshots
         namespace = Snapshotting.namespace_of(store)
