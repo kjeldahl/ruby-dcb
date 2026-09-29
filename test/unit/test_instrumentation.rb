@@ -62,6 +62,33 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
     assert_equal 3, payload[:last_position]
   end
 
+  def exported(type)
+    DcbEventStore::SequencedEvent.new(
+      sequence_position: nil, type: type, data: {}, tags: [], created_at: nil,
+      id: SecureRandom.uuid, causation_id: nil, correlation_id: nil, schema_version: nil
+    )
+  end
+
+  def test_import_emits_event_with_counts_and_position
+    @store.append([DcbEventStore::Event.new(type: "Existing")])
+    known = exported("A")
+    @store.import([known])
+    @events.clear
+
+    imported = @store.import([known, exported("B"), exported("C")])
+
+    assert_equal %w[B C], imported.map(&:type)
+    assert_equal ["import.dcb"], @events.map(&:name)
+    payload = @events[0].payload
+    assert_equal({store: "DcbEventStore::InMemoryStore", event_count: 3, imported_count: 2, last_position: 4},
+                 payload)
+  end
+
+  def test_import_of_nothing_emits_nothing
+    assert_empty @store.import([])
+    assert_empty @events
+  end
+
   def test_append_reports_condition_presence
     query = DcbEventStore::Query.new([DcbEventStore::QueryItem.new(event_types: ["Other"])])
     condition = DcbEventStore::AppendCondition.new(fail_if_events_match: query)

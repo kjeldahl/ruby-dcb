@@ -253,5 +253,7 @@ class TestSqliteDialect < Minitest::Test
     # An import into a TEXT created_at column comes back as the integer's digits.
     assert_equal Time.utc(1970, 1, 1, 0, 0, 1, 500_000), @dialect.decode_timestamp("1500000")
     assert_equal @dialect.decode_timestamp(-1_500_000), @dialect.decode_timestamp("-1500000")
+    # Decimal even with a leading zero (Integer("0100") would read it as octal).
+    assert_equal Time.utc(1970, 1, 1, 0, 0, 0, 100), @dialect.decode_timestamp("0100")
   end
 end

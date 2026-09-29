@@ -96,6 +96,22 @@ class TestAppsignalSubscriber < Minitest::Test
     assert(@appsignal.counters.any? { |name, _, _| name == "dcb.append.conflicts" })
   end
 
+  # --- import ---
+
+  def test_import_counts_events_actually_written
+    @subscriber.call(build_event(name: "import.dcb",
+                                 payload: {store: "DcbEventStore::SqliteStore", event_count: 3, imported_count: 2}))
+
+    assert_equal [["dcb.import.events", 2, {store: "SqliteStore"}]], @appsignal.counters
+  end
+
+  def test_import_with_nothing_written_counts_no_events
+    @subscriber.call(build_event(name: "import.dcb", payload: {imported_count: 0}))
+    @subscriber.call(build_event(name: "import.dcb", payload: {}))
+
+    assert_empty @appsignal.counters
+  end
+
   def test_non_conflict_append_error_is_not_counted_as_conflict
     @subscriber.call(build_event(error: RuntimeError.new("connection lost")))
 
