@@ -132,7 +132,9 @@ module DcbEventStore
       # microseconds the schema's default stores, which SQLite hands straight
       # back as an Integer and which cost no parsing at all; the ISO 8601 text
       # a database created before the column became INTEGER still returns; and
-      # a Time, from a connection carrying a type translator of its own.
+      # a Time, from a connection carrying a type translator of its own. A
+      # TEXT column of an older database hands an imported epoch back as its
+      # digits (TEXT affinity turns the Integer into a String), read as such.
       #
       # Time.at's second argument is microseconds, and Ruby's floor division
       # borrows a whole second for timestamps before the epoch, so the split
@@ -141,6 +143,7 @@ module DcbEventStore
         case value
         when Integer then Time.at(value / MICROSECONDS_PER_SECOND, value % MICROSECONDS_PER_SECOND).utc
         when Time then value
+        when /\A-?\d+\z/ then decode_timestamp(value.to_i)
         else SqlStore::Timestamp.parse(value)
         end
       end

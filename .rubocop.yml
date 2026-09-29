@@ -46,9 +46,9 @@ Metrics/ClassLength:
   Max: 250
 
 Metrics/ModuleLength:
-  Max: 250
   Exclude:
     - "test/**/*"
+    - "lib/dcb_event_store/event_file.rb"
 
 Metrics/BlockLength:
   Max: 30

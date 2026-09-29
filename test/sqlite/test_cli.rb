@@ -91,8 +91,23 @@ class TestCli < Minitest::Test
     status, _, err = cli("export", "-b", "sqlite", "-d", missing)
 
     assert_equal 64, status
-    assert_equal "dcb_events: no SQLite database at #{missing}\n", err
+    assert_equal "dcb_events: no SQLite database at #{missing} (import --create-schema creates one)\n", err
     refute File.exist?(missing)
+  end
+
+  def test_import_refuses_a_missing_sqlite_file_without_create_schema
+    status, _, err = cli("import", "-b", "sqlite", "-d", @target_path, stdin: %({"type":"A"}\n))
+
+    assert_equal 64, status
+    assert_match(/no SQLite database at .*target\.sqlite3/, err)
+    refute File.exist?(@target_path)
+  end
+
+  def test_create_schema_is_refused_on_export
+    status, _, err = cli("export", "-b", "sqlite", "-d", @db_path, "--create-schema")
+
+    assert_equal 64, status
+    assert_equal "dcb_events: --create-schema only applies to import\n", err
   end
 
   # --- import ---
@@ -143,6 +158,7 @@ class TestCli < Minitest::Test
   end
 
   def test_import_without_schema_fails_cleanly
+    SqliteDatabaseHelper.connection(@target_path).close
     status, _, err = cli("import", "-b", "sqlite", "-d", @target_path, stdin: %({"type":"A"}\n))
 
     assert_equal 1, status
@@ -154,6 +170,14 @@ class TestCli < Minitest::Test
 
     assert_equal 64, status
     assert_equal %(dcb_events: line 2: missing "type"\n), err
+  end
+
+  def test_a_missing_driver_gem_is_reported_not_raised
+    cli_instance = DcbEventStore::CLI.new(stdin: StringIO.new, stdout: StringIO.new, stderr: err = StringIO.new)
+    cli_instance.define_singleton_method(:with_sqlite) { |_| raise LoadError, "cannot load such file -- sqlite3" }
+
+    assert_equal 1, cli_instance.run(%w[export -b sqlite -d x.sqlite3])
+    assert_match(/\Adcb_events: cannot load such file -- sqlite3 \(the sqlite driver is optional/, err.string)
   end
 
   # --- options ---

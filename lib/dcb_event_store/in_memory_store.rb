@@ -47,11 +47,16 @@ module DcbEventStore
     # Same contract as SqlStore#import: keeps id, created_at and
     # schema_version, assigns fresh positions in order, skips stored ids.
     def import(events)
-      imported = Array(events).filter_map do |event|
-        insert(event, created_at: event.created_at || Time.now, schema_version: event.schema_version || 1)
+      events = Array(events)
+      return [] if events.empty?
+
+      instrument_import(events) do
+        imported = events.filter_map do |event|
+          insert(event, created_at: (event.created_at || Time.now).floor(6), schema_version: event.schema_version || 1)
+        end
+        notify_listeners unless imported.empty?
+        imported
       end
-      notify_listeners unless imported.empty?
-      imported
     end
 
     def subscribe(query, after: nil, &block)

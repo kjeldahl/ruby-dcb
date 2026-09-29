@@ -37,15 +37,33 @@ module DcbEventStore
           format: FORMAT, version: version,
           exported_at: EventFile.parse_time(record["exported_at"]),
           gem_version: record["gem_version"], store: record["store"],
-          query: Query.new(Array(record["query"]).map { |item| query_item(item) }),
+          query: Query.new(query_items(record["query"])),
           after: record["after"], description: record["description"]
         )
       end
 
+      def self.query_items(value)
+        return [] if value.nil?
+        raise ArgumentError, "\"query\" must be an array, got #{value.class}" unless value.is_a?(Array)
+
+        value.map { |item| query_item(item) }
+      end
+      private_class_method :query_items
+
       def self.query_item(item)
-        QueryItem.new(event_types: item["types"], tags: item["tags"])
+        raise ArgumentError, "query item must be an object, got #{item.class}" unless item.is_a?(Hash)
+
+        QueryItem.new(event_types: string_list(item, "types"), tags: string_list(item, "tags"))
       end
       private_class_method :query_item
+
+      def self.string_list(item, key)
+        list = item[key]
+        return list if list.nil? || (list.is_a?(Array) && list.all?(String))
+
+        raise ArgumentError, "query item #{key.inspect} must be an array of strings, got #{list.inspect}"
+      end
+      private_class_method :string_list
     end
   end
 end

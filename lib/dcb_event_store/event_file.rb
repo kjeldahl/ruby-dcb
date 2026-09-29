@@ -43,6 +43,7 @@ module DcbEventStore
   module EventFile
     KEYS = %w[sequence_position id type tags data causation_id correlation_id schema_version created_at].freeze
     DEFAULT_BATCH_SIZE = 1000
+    TYPE_NAMES = { Hash => "an object", Array => "an array", String => "a string", Integer => "an integer" }.freeze
     FORMAT = "dcb_event_store/events".freeze
     # The header version this gem writes, and the newest it reads.
     FORMAT_VERSION = 1
@@ -89,16 +90,27 @@ module DcbEventStore
       SequencedEvent.new(
         sequence_position: record["sequence_position"],
         type: record.fetch("type").to_s,
-        data: symbolize(record["data"] || {}),
-        tags: Array(record["tags"]).map(&:to_s),
-        created_at: parse_time(record["created_at"]),
-        id: record["id"] || SecureRandom.uuid,
-        causation_id: record["causation_id"],
-        correlation_id: record["correlation_id"],
-        schema_version: record["schema_version"] || 1
+        data: symbolize(typed(record, "data", Hash) || {}),
+        tags: (typed(record, "tags", Array) || []).map(&:to_s),
+        created_at: parse_time(typed(record, "created_at", String)),
+        id: typed(record, "id", String) || SecureRandom.uuid,
+        causation_id: typed(record, "causation_id", String),
+        correlation_id: typed(record, "correlation_id", String),
+        schema_version: typed(record, "schema_version", Integer) || 1
       )
     end
     private_class_method :event_from
+
+    # record[key], nil or an instance of +klass+; ArgumentError otherwise, so
+    # a wrong-typed value is reported with its line instead of failing in the
+    # database or being silently coerced.
+    def self.typed(record, key, klass)
+      value = record[key]
+      return value if value.nil? || value.instance_of?(klass)
+
+      raise ArgumentError, "#{key.inspect} must be #{TYPE_NAMES.fetch(klass)}, got #{value.class}"
+    end
+    private_class_method :typed
 
     def self.parse_object(line)
       record = JSON.parse(line)
@@ -152,13 +164,21 @@ module DcbEventStore
       lines.with_index(1) do |line, number|
         next unless line.match?(/\S/)
 
-        yield entry_from(line, first)
+        entry = entry_at(line, number, first)
         first = false
-      rescue ArgumentError => e
-        raise ArgumentError, "line #{number}: #{e}"
+        yield entry
       end
     end
     private_class_method :each_entry
+
+    # Only the decoding is rescued: an ArgumentError raised further down the
+    # yield chain (the store, the caller's block) is not this line's fault.
+    def self.entry_at(line, number, first)
+      entry_from(line, first)
+    rescue ArgumentError => e
+      raise ArgumentError, "line #{number}: #{e}"
+    end
+    private_class_method :entry_at
 
     def self.entry_from(line, first)
       record = parse_object(line)
@@ -171,8 +191,11 @@ module DcbEventStore
 
     # Imports the events in +source+ (see #each_event) into +store+, in
     # file order, +batch_size+ events per store transaction (nil: the whole
-    # file in one). A failing batch rolls back alone; since stored ids are
-    # skipped, running the import again resumes where it stopped.
+    # file in one). A failing batch rolls back alone and earlier batches stay
+    # committed; running the import again resumes where it stopped only for
+    # lines carrying an id (the stores skip ids they hold), so a file without
+    # ids that failed midway is best imported whole (batch_size: nil) once
+    # fixed, or its imported prefix removed first.
     def self.import(store, source, batch_size: DEFAULT_BATCH_SIZE)
       header = nil
       events = Enumerator.new do |yielder|

@@ -334,3 +334,52 @@ class TestEventFile < Minitest::Test
     assert_equal %w[A B], store.read(DcbEventStore::Query.all).map(&:type)
   end
 end
+
+# Wrong-typed values are rejected at decode; ArgumentErrors raised below the
+# decoder are not blamed on a line.
+class TestEventFileDownstreamErrors < Minitest::Test
+  cover "DcbEventStore::EventFile*"
+
+  EventFile = DcbEventStore::EventFile
+
+  def test_header_rejects_malformed_query
+    {
+      '"query":["CourseDefined"]' => /query item must be an object, got String/,
+      '"query":[5]' => /query item must be an object, got Integer/,
+      '"query":{"types":["A"]}' => /"query" must be an array, got Hash/,
+      '"query":[{"types":"A"}]' => /"types" must be an array of strings, got "A"/,
+      '"query":[{"tags":[1]}]' => /"tags" must be an array of strings, got \[1\]/
+    }.each do |query, message|
+      line = %({"format":"dcb_event_store/events","version":1,#{query}})
+      error = assert_raises(ArgumentError, query) { EventFile.each_event(StringIO.new(line)).to_a }
+      assert_match message, error.message, query
+      assert_match(/\Aline 1: /, error.message)
+    end
+  end
+
+  def test_decode_rejects_wrong_typed_values
+    {
+      '{"type":"A","created_at":123}' => /\A"created_at" must be a string, got Integer\z/,
+      '{"type":"A","id":5}' => /\A"id" must be a string, got Integer\z/,
+      '{"type":"A","schema_version":"x"}' => /\A"schema_version" must be an integer, got String\z/,
+      '{"type":"A","data":[1]}' => /\A"data" must be an object, got Array\z/,
+      '{"type":"A","tags":"abc"}' => /\A"tags" must be an array, got String\z/,
+      '{"type":"A","causation_id":1}' => /\A"causation_id" must be a string, got Integer\z/
+    }.each do |line, message|
+      error = assert_raises(ArgumentError, line) { EventFile.decode(line) }
+      assert_match message, error.message, line
+    end
+  end
+
+  def test_an_argument_error_from_downstream_keeps_its_own_message
+    io = StringIO.new(%({"type":"A"}\n))
+
+    error = assert_raises(ArgumentError) { EventFile.each_event(io) { raise ArgumentError, "from the caller" } } # rubocop:disable Lint/UnreachableLoop
+    assert_equal "from the caller", error.message
+
+    store = Object.new
+    def store.import(_) = raise(ArgumentError, "from the store")
+    error = assert_raises(ArgumentError) { EventFile.import(store, StringIO.new(%({"type":"A"}\n))) }
+    assert_equal "from the store", error.message
+  end
+end

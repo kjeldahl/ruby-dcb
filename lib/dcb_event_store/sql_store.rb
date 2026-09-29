@@ -71,19 +71,7 @@ module DcbEventStore
       events = Array(events)
       return [] if events.empty?
 
-      with_write_transaction do
-        lock_for_import!
-
-        imported = events.filter_map do |event|
-          row = import_event(event)
-          row && @row_mapper.to_imported_event(event, row)
-        end
-
-        notify_position = imported.last&.sequence_position
-        notify_appended(notify_position) if notify_position
-
-        imported
-      end
+      instrument_import(events) { import_in_transaction(events) }
     end
 
     def subscribe(query, after: nil, &block)
@@ -101,6 +89,22 @@ module DcbEventStore
     end
 
     private
+
+    def import_in_transaction(events)
+      with_write_transaction do
+        lock_for_import!
+
+        imported = events.filter_map do |event|
+          row = import_event(event)
+          row && @row_mapper.to_imported_event(event, row)
+        end
+
+        notify_position = imported.last&.sequence_position
+        notify_appended(notify_position) if notify_position
+
+        imported
+      end
+    end
 
     # Reads the matching stream lazily, one BATCH_SIZE page at a time, using
     # keyset pagination on sequence_position so a long stream never has to fit

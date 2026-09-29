@@ -61,6 +61,31 @@ module ImportExportContract
     assert_equal 1, @store.read(DcbEventStore::Query.all).count
   end
 
+  def test_import_truncates_created_at_to_microseconds
+    imported = @store.import([exported_event(created_at: Time.at(1_600_000_000, 123_456_789, :nsec).utc)])[0]
+    read_back = @store.read(DcbEventStore::Query.all).first
+
+    assert_equal Time.at(1_600_000_000, 123_456, :usec).utc, imported.created_at
+    assert_equal imported.created_at, read_back.created_at
+  end
+
+  def test_import_emits_instrumentation_event
+    previous = DcbEventStore.instrumentation
+    DcbEventStore.instrumentation = DcbEventStore::Notifications.new
+    seen = []
+    DcbEventStore.instrumentation.subscribe { |event| seen << event }
+    event = exported_event
+    @store.import([event, event])
+
+    imports = seen.select { |e| e.name == "import.dcb" }
+    assert_equal 1, imports.size
+    assert_equal [2, 1], imports[0].payload.values_at(:event_count, :imported_count)
+    assert_kind_of Integer, imports[0].payload[:last_position]
+    assert_empty(seen.select { |e| e.name == "append.dcb" })
+  ensure
+    DcbEventStore.instrumentation = previous
+  end
+
   def test_import_of_nothing_returns_empty
     assert_empty @store.import([])
   end

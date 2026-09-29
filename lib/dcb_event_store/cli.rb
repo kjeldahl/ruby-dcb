@@ -39,6 +39,9 @@ module DcbEventStore
     rescue OptionParser::ParseError, ArgumentError => e
       @stderr.puts("dcb_events: #{e.message}")
       64
+    rescue LoadError => e
+      @stderr.puts("dcb_events: #{e.message} (the #{options[:backend]} driver is optional: add its gem to the bundle)")
+      1
     rescue StandardError => e
       @stderr.puts("dcb_events: #{e.class}: #{e.message}")
       1
@@ -108,6 +111,9 @@ module DcbEventStore
         raise ArgumentError, "unknown backend #{options[:backend].inspect} (expected postgres or sqlite)"
       end
       raise ArgumentError, "--database is required" if options[:database].nil?
+      return unless options[:create_schema] && options[:command] == "export"
+
+      raise ArgumentError, "--create-schema only applies to import"
     end
 
     def export(store, options)
@@ -164,13 +170,13 @@ module DcbEventStore
       conn&.close
     end
 
-    # Export never creates a database: SQLite would open a missing path as
-    # a new, empty file.
+    # Only import --create-schema creates a database: SQLite would open a
+    # missing path as a new, empty file, leaving one behind after a typo.
     def with_sqlite(options)
       require "sqlite3"
       path = options[:database]
-      if options[:command] == "export" && path != ":memory:" && !File.exist?(path)
-        raise ArgumentError, "no SQLite database at #{path}"
+      unless path == ":memory:" || File.exist?(path) || options[:create_schema]
+        raise ArgumentError, "no SQLite database at #{path} (import --create-schema creates one)"
       end
 
       db = SQLite3::Database.new(path)
