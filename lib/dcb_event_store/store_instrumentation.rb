@@ -76,7 +76,7 @@ module DcbEventStore
     def instrument_import(events)
       DcbEventStore.instrumentation.instrument(
         IMPORT_EVENT,
-        store: self.class.name,
+        **store_identity,
         event_count: events.size
       ) do |payload|
         imported = yield

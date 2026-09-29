@@ -80,8 +80,8 @@ class TestStoreInstrumentationEmission < InstrumentationTestCase
     assert_equal %w[B C], imported.map(&:type)
     assert_equal ["import.dcb"], @events.map(&:name)
     payload = @events[0].payload
-    assert_equal({store: "DcbEventStore::InMemoryStore", event_count: 3, imported_count: 2, last_position: 4},
-                 payload)
+    assert_equal({ store: "DcbEventStore::InMemoryStore", namespace: nil, event_count: 3, imported_count: 2,
+                   last_position: 4 }, payload)
   end
 
   def test_import_of_nothing_emits_nothing
