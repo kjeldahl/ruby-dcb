@@ -19,8 +19,10 @@ module DcbEventStore
     # Pure: no connection, no I/O.
     class Dialect
       def initialize(namespace: nil)
+        namespace = Namespace.wrap(namespace)
         @codec = ArrayCodec.new
-        @events = Namespace.wrap(namespace).events_table
+        @events = namespace.events_table
+        @tx_offset = namespace.tx_offset_function
       end
 
       # Bind-parameter reference for the +index+th parameter (1-based).
@@ -32,6 +34,12 @@ module DcbEventStore
       def type_in(params, types)
         params << encode_list(types)
         "type = ANY(#{placeholder(params.size)}::text[])"
+      end
+
+      # Matches events whose id is one of +ids+.
+      def id_in(params, ids)
+        params << encode_list(ids)
+        "event_id = ANY(#{placeholder(params.size)}::uuid[])"
       end
 
       # Matches events carrying all of +tags+. +after+ is accepted for
@@ -47,6 +55,32 @@ module DcbEventStore
       def after_clause(params, after)
         params << after
         "sequence_position > #{placeholder(params.size)}"
+      end
+
+      # Matches events stored at or before sequence position +through+.
+      def through_clause(params, through)
+        params << through
+        "sequence_position <= #{placeholder(params.size)}"
+      end
+
+      # Matches events past +cursor+, a [tx_id, sequence_position] pair, in
+      # the order #commit_order sorts by.
+      def commit_cursor_clause(params, cursor)
+        params.concat(cursor)
+        "(tx_id, sequence_position) > (#{placeholder(params.size - 1)}::bigint, #{placeholder(params.size)}::bigint)"
+      end
+
+      # Matches events whose transaction is older than the oldest one still
+      # running: committed, and nothing written after can sort below them.
+      # tx_id carries the namespace's offset (see Schema.create_sql), so the
+      # watermark does too.
+      def settled_clause
+        "tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint + #{@tx_offset}()"
+      end
+
+      # The order a subscription delivers in (see PostgresStore#deliver_new).
+      def commit_order
+        "tx_id, sequence_position"
       end
 
       # One "(...)" row fragment for a multi-row INSERT ... VALUES, appending

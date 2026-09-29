@@ -41,11 +41,19 @@ module DcbEventStore
       max_position
     end
 
+    # Appends +events+, guarded by +condition+ when given, and returns their
+    # SequencedEvents.
+    #
+    # Idempotent by event id: when every id is already stored, the append is
+    # taken for a retry of one that went through (its response lost) and
+    # returns the stored events, without checking +condition+ -- which the
+    # retry's own events would otherwise fail. Ids are all that is compared.
+    # Some ids stored and some not raises DuplicateEvent and writes nothing.
     def append(events, condition = nil)
       events = Array(events)
       raise ArgumentError, "append needs at least one event" if events.empty?
 
-      instrument_append(events, condition) do
+      instrument_append(events, condition) do |payload|
         with_write_transaction do
           acquire_locks!(events, condition)
 
@@ -54,10 +62,14 @@ module DcbEventStore
                       else
                         append_without_condition(events)
                       end
+          if sequenced.empty?
+            stored = replay(events)
+            payload[:replayed] = true
+            next stored
+          end
 
-          notify_position = sequenced.last&.sequence_position
-          notify_appended(notify_position) if notify_position
-
+          reject_partial_duplicates!(events, sequenced)
+          notify_appended(sequenced.last.sequence_position)
           sequenced
         end
       end
@@ -81,21 +93,55 @@ module DcbEventStore
       instrument_import(events) { import_in_transaction(events) }
     end
 
+    # Delivers every event matching +query+ (after position +after+), then
+    # blocks and delivers new ones as they are committed. How far it got is
+    # a cursor only the backend reads: a position where events commit in
+    # position order, more on a backend where they need not (see
+    # PostgresStore#subscription_cursor).
+    #
+    # Listens before catching up: an append committed between the catch-up
+    # read and the start of listening would otherwise wake nobody.
     def subscribe(query, after: nil, &block)
-      catch_up = after ? read_from(query, after: after) : read(query)
-      last_pos = instrument_subscribe(catch_up, query, :catch_up, &block) || after
-
       listen
+      cursor = subscription_cursor(after)
+      cursor = deliver_new(query, cursor, :catch_up, &block)
+
       loop do
         wait_for_append
-        new_events = read_from(query, after: last_pos || 0)
-        last_pos = instrument_subscribe(new_events, query, :live, &block) || last_pos
+        cursor = deliver_new(query, cursor, :live, &block)
       end
     ensure
       unlisten
     end
 
+    # Answers each SettleCheck: whether a snapshot of its query's events may
+    # be written at its +through+. Default: a count alone, which is enough
+    # where positions commit in order, since an append still in flight then
+    # holds positions past every committed one. PostgresStore overrides it.
+    def settled(checks)
+      checks.map { |check| count_between(check.query, check.after, check.through) == check.count }
+    end
+
+    # #settled for one check.
+    def settled?(query, after:, through:, count:)
+      settled([SettleCheck.new(query: query, after: after, through: through, count: count)]).first
+    end
+
     private
+
+    # The cursor a subscription starts from. Here a position: events commit
+    # in position order (a single writer), so none can later appear below
+    # the last one delivered.
+    def subscription_cursor(after)
+      after
+    end
+
+    # Delivers what matches +query+ past +cursor+ and returns the cursor
+    # moved past it.
+    def deliver_new(query, cursor, phase, &)
+      events = phase == :live || cursor ? read_from(query, after: cursor || 0) : read(query)
+      instrument_subscribe(events, query, phase, &) || cursor
+    end
 
     def import_in_transaction(events)
       with_write_transaction do
@@ -136,16 +182,41 @@ module DcbEventStore
     # insert. Safe because the transaction plus #acquire_locks! serializes it
     # against competing appends. Backends that can do better (PostgreSQL
     # folds check and insert into one statement) override this.
+    #
+    # A failed condition writes nothing and returns no events, like an
+    # append whose ids are all stored: #replay tells the two apart, and so
+    # only runs its lookup when nothing was written.
     def append_with_condition(events, condition)
       matching = count_matching(condition.fail_if_events_match, condition.after)
-      raise ConditionNotMet, "conflicting event(s)" if matching.positive?
+      return [] if matching.positive?
 
       append_without_condition(events)
     end
 
+    # An append that wrote nothing: either every id is stored (a retry,
+    # answered with the stored events) or the condition failed. Checked in
+    # that order, so a retry never trips over its own events.
+    def replay(events)
+      ids = events.map(&:id).uniq
+      stored = fetch_by_ids(ids)
+      raise ConditionNotMet, "conflicting event(s)" if stored.empty?
+
+      stored_ids = stored.map { |row| row["event_id"] }
+      raise DuplicateEvent, stored_ids if stored_ids.size < ids.size
+
+      stored.map { |row| @row_mapper.to_sequenced_event(row) }
+    end
+
+    # An append that wrote some events but skipped others as stored. Raising
+    # rolls the written ones back.
+    def reject_partial_duplicates!(events, sequenced)
+      skipped = events.map(&:id).uniq - sequenced.map(&:id)
+      raise DuplicateEvent, skipped unless skipped.empty?
+    end
+
     # Inserts the events one by one, skipping the ones whose event_id is
-    # already stored (idempotent re-append) and returning a SequencedEvent
-    # for each row that was actually written.
+    # already stored and returning a SequencedEvent for each row that was
+    # actually written.
     def append_without_condition(events)
       events.filter_map do |event|
         row = insert_event(event)
@@ -176,10 +247,22 @@ module DcbEventStore
       raise NotImplementedError, "#{self.class} must implement #count_matching"
     end
 
+    # Number of stored events matching +query+ in (+after+, +through+],
+    # +after+ nil meaning from the start.
+    def count_between(query, after, through)
+      raise NotImplementedError, "#{self.class} must implement #count_between"
+    end
+
     # Inserts one event, returning its row (at least sequence_position and
     # created_at) or nil when an event with the same id already exists.
     def insert_event(event)
       raise NotImplementedError, "#{self.class} must implement #insert_event"
+    end
+
+    # The stored rows (as #fetch_batch returns them) whose event_id is one of
+    # +ids+, ordered by ascending sequence position.
+    def fetch_by_ids(ids)
+      raise NotImplementedError, "#{self.class} must implement #fetch_by_ids"
     end
 
     # Takes the lock that keeps every append out while an import runs. May

@@ -51,6 +51,11 @@ module DcbEventStore
       @db.execute("#{sql} LIMIT ?", params + [limit])
     end
 
+    def fetch_by_ids(ids)
+      sql, params = @sql.by_ids_sql(ids)
+      @db.execute(sql, params)
+    end
+
     def max_position
       @db.get_first_value("SELECT max(sequence_position) FROM #{@namespace.events_table}")
     end
@@ -61,6 +66,11 @@ module DcbEventStore
 
     def count_matching(query, after)
       sql, params = @sql.condition_sql(query, after)
+      @db.get_first_value(sql, params).to_i
+    end
+
+    def count_between(query, after, through)
+      sql, params = @sql.count_between_sql(query, after, through)
       @db.get_first_value(sql, params).to_i
     end
 

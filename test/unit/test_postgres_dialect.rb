@@ -38,6 +38,20 @@ class TestPostgresDialect < Minitest::Test
     assert_equal ["x", "y", "{A}"], params
   end
 
+  # --- id_in ---
+
+  def test_id_in_encodes_the_ids_as_a_uuid_array
+    params = []
+    assert_equal "event_id = ANY($1::uuid[])", @dialect.id_in(params, %w[id1 id2])
+    assert_equal ["{id1,id2}"], params
+  end
+
+  def test_id_in_numbers_off_the_params_already_collected
+    params = %w[x y]
+    assert_equal "event_id = ANY($3::uuid[])", @dialect.id_in(params, ["id1"])
+    assert_equal ["x", "y", "{id1}"], params
+  end
+
   # --- tags_contain ---
 
   def test_tags_contain_encodes_the_list_and_refers_to_it
@@ -72,6 +86,33 @@ class TestPostgresDialect < Minitest::Test
     params = %w[x y]
     assert_equal "sequence_position > $3", @dialect.after_clause(params, 4)
     assert_equal ["x", "y", 4], params
+  end
+
+  # --- commit order ---
+
+  def test_commit_cursor_clause_binds_both_halves_of_the_cursor
+    params = %w[x]
+    assert_equal "(tx_id, sequence_position) > ($2::bigint, $3::bigint)", @dialect.commit_cursor_clause(params, [40, 7])
+    assert_equal ["x", 40, 7], params
+  end
+
+  def test_settled_clause_offsets_the_watermark_by_the_namespace
+    assert_equal "tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint + events_tx_offset()",
+                 @dialect.settled_clause
+    assert_equal "tx_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint + billing_events_tx_offset()",
+                 DcbEventStore::PostgresStore::Dialect.new(namespace: "billing").settled_clause
+  end
+
+  def test_commit_order
+    assert_equal "tx_id, sequence_position", @dialect.commit_order
+  end
+
+  # --- through_clause ---
+
+  def test_through_clause_binds_the_position_inclusively
+    params = %w[x]
+    assert_equal "sequence_position <= $2", @dialect.through_clause(params, 4)
+    assert_equal ["x", 4], params
   end
 
   # --- insert_row ---
@@ -149,6 +190,12 @@ class TestPostgresDialect < Minitest::Test
       RETURNING sequence_position, created_at
     SQL
     assert_equal expected, @dialect.import_sql
+  end
+
+  def test_namespaced_import_sql_writes_the_namespaced_table
+    dialect = DcbEventStore::PostgresStore::Dialect.new(namespace: "billing")
+
+    assert_equal @dialect.import_sql.sub("INTO events", "INTO billing_events"), dialect.import_sql
   end
 
   def test_import_params_carry_schema_version_and_created_at

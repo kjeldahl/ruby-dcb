@@ -58,7 +58,7 @@ class TestPostgresNamespace < Minitest::Test
 
     assert_equal %w[billing_events billing_projection_snapshots], table_names("billing_%")
     assert_equal %w[idx_billing_events_correlation_id idx_billing_events_event_id
-                    idx_billing_events_tags idx_billing_events_type],
+                    idx_billing_events_tags idx_billing_events_tx_id idx_billing_events_type],
                  index_names("billing_events")
   end
 

@@ -37,12 +37,29 @@ module DcbEventStore
         [sql, params]
       end
 
+      # SELECT of the stored events whose id is one of +ids+, ordered by
+      # ascending sequence position: what an append whose ids are all stored
+      # answers with.
+      def by_ids_sql(ids)
+        params = []
+        ["SELECT * FROM #{@events} WHERE #{@dialect.id_in(params, ids)} ORDER BY sequence_position ASC", params]
+      end
+
       # SELECT COUNT(*) used to evaluate an AppendCondition (and to total the
       # browser): how many existing events match +query+ after +after+.
       def condition_sql(query, after)
         where, params = where_clause(query, after)
         sql = where ? "SELECT COUNT(*) FROM #{@events} WHERE #{where}" : "SELECT COUNT(*) FROM #{@events}"
         [sql, params]
+      end
+
+      # SELECT COUNT(*) of the events matching +query+ in (+after+,
+      # +through+], +after+ nil meaning from the start: what a snapshot at
+      # +through+ must have folded (see SqlStore#settled?).
+      def count_between_sql(query, after, through)
+        where, params = where_clause(query, after)
+        bound = @dialect.through_clause(params, through)
+        ["SELECT COUNT(*) FROM #{@events} WHERE #{where ? "(#{where}) AND #{bound}" : bound}", params]
       end
 
       # The "(VALUES ...)" row fragments and their bind parameters for inserting
@@ -56,7 +73,33 @@ module DcbEventStore
         [value_rows, params.drop(param_offset)]
       end
 
+      # SELECT of the settled events matching +query+ past +cursor+ (nil =
+      # from the start), in commit order: what a subscription delivers on a
+      # backend where positions can commit out of order. Needs a dialect that
+      # answers #commit_cursor_clause, #settled_clause and #commit_order
+      # (PostgreSQL's).
+      def commit_order_sql(query, cursor)
+        clauses, params = commit_order_clauses(query, cursor)
+        where = (clauses << @dialect.settled_clause).join(" AND ")
+        ["SELECT * FROM #{@events} WHERE #{where} ORDER BY #{@dialect.commit_order}", params]
+      end
+
+      # SELECT of one event matching +query+ past +cursor+, settled or not:
+      # whether a subscription that read #commit_order_sql to its end was held
+      # back.
+      def pending_sql(query, cursor)
+        clauses, params = commit_order_clauses(query, cursor)
+        sql = "SELECT 1 FROM #{@events}"
+        sql += " WHERE #{clauses.join(' AND ')}" unless clauses.empty?
+        ["#{sql} LIMIT 1", params]
+      end
+
       private
+
+      def commit_order_clauses(query, cursor)
+        where, params = where_clause(query, nil)
+        [[where && "(#{where})", cursor && @dialect.commit_cursor_clause(params, cursor)].compact, params]
+      end
 
       def where_clause(query, after)
         return match_all_where(after) if query.match_all?

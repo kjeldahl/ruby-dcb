@@ -43,6 +43,12 @@ module InMemoryEquivalenceContract
         guard
       )
 
+      # A retry of the guarded append returns the stored event on both.
+      retried = store.append(
+        [DcbEventStore::Event.new(type: "StudentSubscribed", tags: ["student:s1", "course:c1"], id: ids[2])],
+        guard
+      )
+
       # Same condition again must now fail on both stores.
       failure = assert_raises(DcbEventStore::ConditionNotMet) do
         store.append(
@@ -63,6 +69,7 @@ module InMemoryEquivalenceContract
         all: store.read(DcbEventStore::Query.all).to_a.map { |e| comparable(e) },
         filtered: filtered.map { |e| comparable(e) },
         from_position: from_position.map { |e| comparable(e) },
+        retried: retried.map { |e| comparable(e) },
         failure_class: failure.class
       }
     end
