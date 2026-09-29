@@ -231,6 +231,37 @@ class TestCli < Minitest::Test
     ENV.delete("DCB_BACKEND")
   end
 
+  # --- namespaces ---
+
+  def test_namespace_round_trip_is_isolated_from_the_default_log
+    DcbEventStore::SqliteStore::Schema.create!(@db, namespace: "billing")
+    billing = DcbEventStore::SqliteStore.new(@db, namespace: "billing")
+    billing.append([DcbEventStore::Event.new(type: "InvoiceIssued", tags: ["invoice:i1"])])
+
+    _, exported, = cli("export", "-b", "sqlite", "-d", @db_path, "--namespace", "billing")
+    _, default_export, = cli("export", "-b", "sqlite", "-d", @db_path)
+    assert_equal ["InvoiceIssued"], types(exported)
+    assert_equal 3, types(default_export).size
+
+    status, _, err = cli("import", "-b", "sqlite", "-d", @target_path, "-n", "billing", "--create-schema",
+                         stdin: exported)
+    assert_equal 0, status, err
+
+    db = SqliteDatabaseHelper.connection(@target_path)
+    imported = DcbEventStore::SqliteStore.new(db, namespace: "billing").read(DcbEventStore::Query.all).map(&:type)
+    tables = db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").flatten
+    db.close
+    assert_equal ["InvoiceIssued"], imported
+    refute_includes tables, "events"
+  end
+
+  def test_invalid_namespace_is_a_usage_error
+    status, _, err = cli("export", "-b", "sqlite", "-d", @db_path, "--namespace", "Bad-Name")
+
+    assert_equal 64, status
+    assert_match(/\Adcb_events: /, err)
+  end
+
   # --- the executable ---
 
   def test_executable_round_trip

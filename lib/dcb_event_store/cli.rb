@@ -78,6 +78,10 @@ module DcbEventStore
              "PostgreSQL dbname, conninfo or URL; SQLite file path (default: $DATABASE_URL)") do |v|
           options[:database] = v
         end
+        o.on("-n", "--namespace NAME",
+             "Bounded context (namespaced log) to read or write (default: the default log)") do |v|
+          options[:namespace] = v
+        end
         o.separator ""
         o.separator "export:"
         o.on("--type TYPE", "Only events of this type (repeatable: any of)") { |v| options[:types] << v }
@@ -111,6 +115,8 @@ module DcbEventStore
         raise ArgumentError, "unknown backend #{options[:backend].inspect} (expected postgres or sqlite)"
       end
       raise ArgumentError, "--database is required" if options[:database].nil?
+
+      Namespace.new(options[:namespace])
       return unless options[:create_schema] && options[:command] == "export"
 
       raise ArgumentError, "--create-schema only applies to import"
@@ -164,8 +170,8 @@ module DcbEventStore
       db = options[:database]
       conn = db.match?(%r{=|://}) ? PG.connect(db) : PG.connect(dbname: db)
       conn.exec("SET client_min_messages TO warning")
-      PostgresStore::Schema.create!(conn) if options[:create_schema]
-      yield PostgresStore.new(conn)
+      PostgresStore::Schema.create!(conn, namespace: options[:namespace]) if options[:create_schema]
+      yield PostgresStore.new(conn, namespace: options[:namespace])
     ensure
       conn&.close
     end
@@ -180,8 +186,8 @@ module DcbEventStore
       end
 
       db = SQLite3::Database.new(path)
-      options[:create_schema] ? SqliteStore::Schema.create!(db) : SqliteStore::Schema.configure!(db)
-      yield SqliteStore.new(db)
+      options[:create_schema] ? SqliteStore::Schema.create!(db, namespace: options[:namespace]) : SqliteStore::Schema.configure!(db)
+      yield SqliteStore.new(db, namespace: options[:namespace])
     ensure
       db&.close
     end

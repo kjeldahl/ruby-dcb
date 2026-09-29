@@ -483,10 +483,11 @@ dcb_events export -b sqlite -d events.sqlite3 > events.jsonl
 dcb_events export -b postgres -d my_event_store --type CourseDefined --tag course:c1 --after 100 \
   --description "course c1 since 100" out.jsonl
 dcb_events import -b postgres -d postgres://localhost/my_event_store --create-schema seeds.jsonl
+dcb_events export -b sqlite -d app.sqlite3 --namespace billing > billing.jsonl
 dcb_events --help
 ```
 
-`-b`/`-d` default to `$DCB_BACKEND`/`$DATABASE_URL`. `--create-schema` installs the schema first; `--batch-size N` sets events per transaction (0: whole file in one).
+`-b`/`-d` default to `$DCB_BACKEND`/`$DATABASE_URL`. `--create-schema` installs the schema first; `--batch-size N` sets events per transaction (0: whole file in one). `-n`/`--namespace NAME` reads or writes that bounded context's log (and `--create-schema` installs its tables); without it the default log is used.
 
 ### In-memory store for fast tests
 
