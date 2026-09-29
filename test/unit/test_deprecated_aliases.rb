@@ -65,6 +65,18 @@ class TestDeprecatedAliases < Minitest::Test
     assert_empty warnings
   end
 
+  def test_schema_sql_constants_are_the_default_namespace_ddl_and_warn
+    [DcbEventStore::PostgresStore::Schema, DcbEventStore::SqliteStore::Schema].each do |schema|
+      create, create_warnings = with_warnings { schema::CREATE_SQL }
+      drop, drop_warnings = with_warnings { schema::DROP_SQL }
+
+      assert_equal schema.create_sql, create
+      assert_equal schema.drop_sql, drop
+      assert_match(/constant .*::CREATE_SQL is deprecated/, create_warnings.first)
+      assert_match(/constant .*::DROP_SQL is deprecated/, drop_warnings.first)
+    end
+  end
+
   private
 
   def with_warnings(deprecated: true)

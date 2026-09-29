@@ -7,8 +7,16 @@ module DcbEventStore
     # supply dump:/load: (Marshal is the general answer) or copy on load.
     # Shared by every store in the process and lost with it — a warm cache,
     # not a persistent one.
+    #
+    # Every instance is its own map, so +namespace:+ changes nothing here;
+    # it is accepted (and validated) for parity with the SQL snapshot
+    # stores, and reported in the snapshot.dcb payloads.
     class InMemorySnapshotStore
-      def initialize
+      # The Namespace this store was built with.
+      attr_reader :namespace
+
+      def initialize(namespace: nil)
+        @namespace = Namespace.wrap(namespace)
         @entries = {}
         @mutex = Mutex.new
       end
@@ -43,8 +51,8 @@ module DcbEventStore
       # versions but +keep_version+ (every version when nil). Returns how
       # many were removed.
       def purge(name:, keep_version: nil)
-        prefix = Snapshot.key_prefix(name, nil)
-        keep = keep_version && Snapshot.key_prefix(name, keep_version)
+        prefix = Snapshot.key_prefix(name, nil, namespace: @namespace)
+        keep = keep_version && Snapshot.key_prefix(name, keep_version, namespace: @namespace)
         delete_where { |key| key.start_with?(prefix) && !(keep && key.start_with?(keep)) }
       end
 

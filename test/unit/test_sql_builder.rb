@@ -103,6 +103,30 @@ class TestSqlBuilder < Minitest::Test
     assert_equal [9], params
   end
 
+  # --- namespace ---
+
+  def test_namespaced_builder_reads_and_counts_the_namespaced_table
+    builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PostgresStore::Dialect.new, namespace: "billing")
+
+    sql, = builder.read_sql(query([item(event_types: ["A"])]), after: 3)
+    assert_equal "SELECT * FROM billing_events WHERE ((type = ANY($1::text[]))) AND sequence_position > $2 " \
+                 "ORDER BY sequence_position ASC", sql
+
+    sql, = builder.condition_sql(DcbEventStore::Query.all, nil)
+    assert_equal "SELECT COUNT(*) FROM billing_events", sql
+
+    sql, = builder.condition_sql(DcbEventStore::Query.all, 9)
+    assert_equal "SELECT COUNT(*) FROM billing_events WHERE sequence_position > $1", sql
+  end
+
+  def test_namespace_accepts_a_namespace_object
+    namespace = DcbEventStore::Namespace.new("billing")
+    builder = DcbEventStore::SqlStore::SqlBuilder.new(DcbEventStore::PostgresStore::Dialect.new, namespace: namespace)
+
+    sql, = builder.read_sql(DcbEventStore::Query.all, after: nil)
+    assert_equal "SELECT * FROM billing_events ORDER BY sequence_position ASC", sql
+  end
+
   # --- values_clause ---
 
   def test_values_clause_single_event_no_offset

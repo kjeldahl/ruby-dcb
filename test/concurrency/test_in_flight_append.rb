@@ -50,7 +50,7 @@ class TestInFlightAppend < Minitest::Test
   # committed (or, with +blocks: false+, that it did not wait at all). A
   # racing append that does not block is the bug of issue #42: its condition
   # is evaluated against a log missing the in-flight event.
-  def race(in_flight:, racing:, blocks: true)
+  def race(in_flight:, racing:, blocks: true, racing_namespace: nil)
     paused_at = Concurrent::Event.new
     release = Concurrent::Event.new
     paused_conn = PostgresDatabaseHelper.connection
@@ -60,7 +60,7 @@ class TestInFlightAppend < Minitest::Test
     racer_conn = PostgresDatabaseHelper.connection
     outcome = Concurrent::Array.new
     racer = Thread.new do
-      racing.call(DcbEventStore::PostgresStore.new(racer_conn))
+      racing.call(DcbEventStore::PostgresStore.new(racer_conn, namespace: racing_namespace))
       outcome << :appended
     rescue DcbEventStore::ConditionNotMet
       outcome << :conflict
@@ -154,5 +154,24 @@ class TestInFlightAppend < Minitest::Test
     assert_equal :appended, outcome
     assert_equal %w[course:a course:b].sort,
                  @store.read(DcbEventStore::Query.all).flat_map(&:tags).sort
+  end
+
+  # Namespaces are separate logs, so their lock keys are separate too: an
+  # in-flight append on course:c1 in the default namespace does not hold up
+  # a conditional append on the very same tag in another namespace, even a
+  # type-only condition, which inside one namespace takes the global key
+  # exclusively.
+  def test_appends_in_different_namespaces_do_not_block_each_other
+    DcbEventStore::PostgresStore::Schema.create!(@conn, namespace: "billing")
+    sub = -> { DcbEventStore::Event.new(type: "Sub", tags: ["course:c1"]) }
+    on_any_sub = DcbEventStore::AppendCondition.new(fail_if_events_match: query(["Sub"]))
+
+    outcome = race(in_flight: [[sub.call]], racing: ->(store) { store.append([sub.call], on_any_sub) },
+                   blocks: false, racing_namespace: "billing")
+
+    assert_equal :appended, outcome
+    assert_equal 1, DcbEventStore::PostgresStore.new(@conn, namespace: "billing").last_position
+  ensure
+    DcbEventStore::PostgresStore::Schema.drop!(@conn, namespace: "billing")
   end
 end

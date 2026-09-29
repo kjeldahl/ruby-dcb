@@ -22,18 +22,25 @@ module DcbEventStore
   #
   # The schema must be installed (or at least Schema.configure! run) on the
   # connection before use.
+  #
+  # +namespace:+ selects which event log in the database the store works on
+  # (see Namespace): its own events and event_tags tables, with their own
+  # sequence. The schema must have been installed for that namespace
+  # (Schema.create!(db, namespace: ...)). Polling subscribers wake on any
+  # commit to the file, whichever namespace it landed in, and read only
+  # their own.
   class SqliteStore < SqlStore
     attr_reader :poll_interval
 
-    def initialize(db, upcaster: nil, subscribe_instrumentation: :event, poll_interval: 0.1)
-      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation)
+    def initialize(db, upcaster: nil, subscribe_instrumentation: :event, poll_interval: 0.1, namespace: nil)
+      super(upcaster: upcaster, subscribe_instrumentation: subscribe_instrumentation, namespace: namespace)
       @db = db
       # The row mapper reads rows by column name, so hash rows are not
       # optional; a connection that was opened elsewhere may not have them.
       @db.results_as_hash = true
       @poll_interval = poll_interval
-      @dialect = Dialect.new
-      @sql = SqlBuilder.new(@dialect)
+      @dialect = Dialect.new(namespace: @namespace)
+      @sql = SqlBuilder.new(@dialect, namespace: @namespace)
       @row_mapper = RowMapper.new(@dialect, @upcaster)
     end
 
@@ -45,7 +52,7 @@ module DcbEventStore
     end
 
     def max_position
-      @db.get_first_value("SELECT max(sequence_position) FROM events")
+      @db.get_first_value("SELECT max(sequence_position) FROM #{@namespace.events_table}")
     end
 
     # Nothing to take: BEGIN IMMEDIATE already made this connection the

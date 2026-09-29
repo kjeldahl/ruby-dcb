@@ -32,6 +32,10 @@ module DcbEventStore
   # - :batch - one event per delivery round (the whole catch-up, then one
   #   per NOTIFY wake-up), with event_count, last_position and max_lag;
   #   duration spans reading plus all handler calls in the round.
+  #
+  # Every payload names the store (its class) and its namespace (the name,
+  # nil in the default namespace), so an application running several
+  # bounded contexts can tell their events apart.
   module StoreInstrumentation
     APPEND_EVENT = "append.dcb".freeze
     READ_EVENT = "read.dcb".freeze
@@ -41,14 +45,23 @@ module DcbEventStore
     # Emitted by DecisionModel::Snapshotting around its snapshot store calls
     # (operation: :load once per build, :write once per snapshot written).
     SNAPSHOT_EVENT = "snapshot.dcb".freeze
+    # Emitted by Namespace when a new name lands on an advisory-lock offset
+    # another name already holds (payload: namespace:, shares_with:,
+    # lock_offset:).
+    NAMESPACE_COLLISION_EVENT = "namespace_collision.dcb".freeze
     SUBSCRIBE_MODES = %i[event batch].freeze
 
     private
 
+    # The store: and namespace: every payload starts with.
+    def store_identity
+      { store: self.class.name, namespace: namespace.name }
+    end
+
     def instrument_append(events, condition)
       DcbEventStore.instrumentation.instrument(
         APPEND_EVENT,
-        store: self.class.name,
+        **store_identity,
         event_count: events.size,
         event_types: events.map(&:type).uniq,
         condition: !condition.nil?
@@ -63,7 +76,7 @@ module DcbEventStore
     def instrument_import(events)
       DcbEventStore.instrumentation.instrument(
         IMPORT_EVENT,
-        store: self.class.name,
+        **store_identity,
         event_count: events.size
       ) do |payload|
         imported = yield
@@ -78,7 +91,7 @@ module DcbEventStore
       return events unless instrumentation.listening?(READ_EVENT)
 
       Enumerator.new do |yielder|
-        payload = { store: self.class.name, query: query, after: after }
+        payload = store_identity.merge(query: query, after: after)
         instrumentation.instrument(READ_EVENT, payload) do |inner|
           inner[:event_count] = 0
           events.each do |event|
@@ -126,10 +139,12 @@ module DcbEventStore
 
     def deliver_per_event(instrumentation, events, query, phase)
       last_position = nil
+      identity = store_identity
       events.each do |event|
         last_position = event.sequence_position
         payload = {
-          store: self.class.name, query: query, phase: phase,
+          **identity,
+          query: query, phase: phase,
           sequence_position: event.sequence_position,
           lag: Time.now - event.created_at
         }
@@ -140,7 +155,7 @@ module DcbEventStore
 
     def deliver_batched(instrumentation, events, query, phase)
       last_position = nil
-      payload = { store: self.class.name, query: query, phase: phase }
+      payload = store_identity.merge(query: query, phase: phase)
       instrumentation.instrument(SUBSCRIBE_EVENT, payload) do |inner|
         inner[:event_count] = 0
         events.each do |event|

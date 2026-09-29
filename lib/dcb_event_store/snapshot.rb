@@ -14,7 +14,8 @@ module DcbEventStore
   # configuration serves every instance of a projection and each entity gets
   # its own snapshot. A fingerprint longer than a SHA-256 hex digest is
   # replaced by that digest, so a key never grows with the query beyond
-  # "name/vN/" plus 64 characters; short ones stay readable.
+  # "name/vN/" plus 64 characters; short ones stay readable. The event
+  # store's namespace, when it has one, leads the key ("<namespace>/name/…").
   #
   # Nothing can tell that a handler changed, so invalidation is explicit:
   # +version+ has no default, and bumping it makes the old snapshots
@@ -53,11 +54,13 @@ module DcbEventStore
     # Longest fingerprint kept verbatim: the length of a SHA-256 hex digest.
     DIGEST_LENGTH = 64
 
-    # "<epoch>/name/vN/" without the epoch part when none is set, or without
-    # the version part when +version+ is nil: what every key of +name+ (at
+    # "<epoch>/<namespace>/name/vN/" without the epoch part when none is set,
+    # without the namespace part in the default namespace and without the
+    # version part when +version+ is nil: what every key of +name+ (at
     # +version+) starts with, which is what the stores' #purge matches on.
-    def self.key_prefix(name, version)
-      parts = [Snapshots.epoch, name]
+    # Namespace names cannot contain "/", so the parts never blur together.
+    def self.key_prefix(name, version, namespace: nil)
+      parts = [Snapshots.epoch, Namespace.wrap(namespace).name, name]
       parts << "v#{version}" if version
       "#{parts.compact.join('/')}/"
     end
@@ -68,8 +71,11 @@ module DcbEventStore
       Snapshots.epoch && "#{Snapshots.epoch}/"
     end
 
-    def key(query)
-      "#{self.class.key_prefix(@name, @version)}#{key_part(query.fingerprint)}"
+    # +namespace+ is the event store's: a snapshot holds a position in that
+    # store's log, so it must never be read back against another's, even
+    # when both stores share one projection_snapshots table.
+    def key(query, namespace: nil)
+      "#{self.class.key_prefix(@name, @version, namespace: namespace)}#{key_part(query.fingerprint)}"
     end
 
     def key_part(fingerprint)
