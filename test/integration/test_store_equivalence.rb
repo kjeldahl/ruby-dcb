@@ -25,6 +25,7 @@ class TestStoreEquivalence < Minitest::Test
   def teardown
     teardown_db
   end
+
   # Rows written before Event dropped repeated tags keep them: a read must
   # still match and hand the tags back as stored.
   def test_reads_legacy_row_with_duplicate_tags
