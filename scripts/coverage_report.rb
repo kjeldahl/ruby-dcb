@@ -9,16 +9,27 @@
 
 require "json"
 
+# Repo-relative path. Falls back to the lib/ tail when the report was
+# generated in a different checkout directory.
+def relative_path(file_path)
+  root = "#{Dir.pwd}/"
+  return file_path.delete_prefix(root) if file_path.start_with?(root)
+
+  file_path.sub(%r{.*/(?=lib/)}, "")
+end
+
 def load_coverage(path)
   data = JSON.parse(File.read(path))
   result = data.fetch("result", data)
   metrics = result.fetch("metrics", {})
 
   file_coverage = {}
-  (result["coverage"] || result.dig("groups") || {}).each do |file_path, file_data|
+  # simplecov-json writes per-file data as a "files" array.
+  result.fetch("files", []).each do |file|
+    file_path = file["filename"].to_s
     next unless file_path.end_with?(".rb")
 
-    lines = file_data.is_a?(Hash) ? file_data["lines"] : file_data
+    lines = file.dig("coverage", "lines") || file["coverage"]
     next unless lines.is_a?(Array)
 
     relevant = lines.compact
@@ -26,8 +37,7 @@ def load_coverage(path)
     total = relevant.size
     pct = total > 0 ? (covered.to_f / total * 100).round(2) : 100.0
 
-    short_path = file_path.sub(%r{.*/lib/}, "lib/")
-    file_coverage[short_path] = { covered: covered, total: total, percent: pct }
+    file_coverage[relative_path(file_path)] = { covered: covered, total: total, percent: pct }
   end
 
   {
