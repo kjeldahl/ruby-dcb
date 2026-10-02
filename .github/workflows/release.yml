@@ -1,8 +1,15 @@
 # Tags and releases a version the moment it lands on main: the version
 # constant is the trigger, so a release is one bump commit away and never a
 # manual `git tag`. Idempotent -- re-running on a version that is already
-# tagged is a no-op -- and dispatchable, which is how a version that reached
-# main before this workflow existed gets its tag.
+# tagged is a no-op.
+#
+# Also runnable by hand (Actions -> Release -> Run workflow, on main):
+#   version blank      -> next minor (0.7.0 -> 0.8.0)
+#   version "1.2.3"    -> that version (must be above the current one)
+#   version "current"  -> no bump, tag what version.rb holds (how a version
+#                         that reached main before this workflow got its tag)
+# A bump is committed to main by the workflow, then tagged here; a push made
+# with GITHUB_TOKEN starts no workflow, so the push trigger does not re-run.
 name: Release
 
 on:
@@ -10,6 +17,11 @@ on:
     branches: [main]
     paths: ["lib/dcb_event_store/version.rb"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release: blank = next minor, "current" = tag version.rb as is'
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -31,16 +43,50 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: false
 
+      - name: Bump version.rb and push to main
+        if: github.event_name == 'workflow_dispatch' && inputs.version != 'current'
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::A bump commits to main; run the workflow on main."
+            exit 1
+          fi
+          ruby -Ilib -e '
+            require "dcb_event_store/version"
+            current = Gem::Version.new(DcbEventStore::VERSION)
+            requested = ENV.fetch("REQUESTED").strip
+            target =
+              if requested.empty?
+                major, minor = current.segments
+                "#{major}.#{minor + 1}.0"
+              else
+                requested
+              end
+            (puts "::error::#{target.inspect} is not a version (x.y.z)"; exit 1) unless target.match?(/\A\d+\.\d+\.\d+([.-][0-9A-Za-z.]+)?\z/)
+            (puts "::error::#{target} is not above #{current}"; exit 1) unless Gem::Version.new(target) > current
+            path = "lib/dcb_event_store/version.rb"
+            File.write(path, File.read(path).sub(/VERSION = "[^"]+"/, %(VERSION = "#{target}")))
+            puts "#{current} -> #{target}"
+          '
+          version=$(ruby -Ilib -e 'load "lib/dcb_event_store/version.rb"; print DcbEventStore::VERSION')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $version"
+          git push origin HEAD:main
+
       # The gemspec reads DcbEventStore::VERSION, so this is the one number.
       - id: version
         run: |
           version=$(ruby -Ilib -e 'require "dcb_event_store/version"; print DcbEventStore::VERSION')
           echo "tag=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Tag and release, unless the tag is already there
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.version.outputs.sha }}
         run: |
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "$TAG is already tagged, nothing to release."
@@ -50,7 +96,7 @@ jobs:
           notes=()
           [ -f ".github/release-notes/$TAG.md" ] && notes=(--notes-file ".github/release-notes/$TAG.md")
           gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
+            --target "$SHA" \
             --title "$TAG" \
             "${notes[@]}" \
             --generate-notes
