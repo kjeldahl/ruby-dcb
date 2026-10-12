@@ -27,10 +27,11 @@ class TestCliPostgres < Minitest::Test
 
   def test_import_then_export_by_dbname
     seed = %({"id":"#{SecureRandom.uuid}","type":"A","tags":["x"],"schema_version":2}\n)
-    status, _, err = cli("import", "-b", "postgres", "-d", "dcb_event_store_test", "--create-schema", stdin: seed)
+    db = PostgresDatabaseHelper.database
+    status, _, err = cli("import", "-b", "postgres", "-d", db, "--create-schema", stdin: seed)
     assert_equal [0, "imported 1 event(s), skipped 0 already stored\n"], [status, err]
 
-    status, out, = cli("export", "-b", "postgres", "-d", "dcb_event_store_test")
+    status, out, = cli("export", "-b", "postgres", "-d", db)
     assert_equal 0, status
     assert_equal([["A", 2]], out.lines.drop(1).map { |l| JSON.parse(l).values_at("type", "schema_version") })
   end
@@ -38,9 +39,10 @@ class TestCliPostgres < Minitest::Test
   def test_conninfo_string_and_url
     @store.append([DcbEventStore::Event.new(type: "A")])
     host = ENV.fetch("PGHOST", nil)
-    url = host && !host.empty? && !host.start_with?("/") ? "postgres://#{host}/dcb_event_store_test" : nil
+    db = PostgresDatabaseHelper.database
+    url = host && !host.empty? && !host.start_with?("/") ? "postgres://#{host}/#{db}" : nil
 
-    ["dbname=dcb_event_store_test", url].compact.each do |database|
+    ["dbname=#{db}", url].compact.each do |database|
       status, out, err = cli("export", "-b", "postgres", "-d", database)
       assert_equal [0, 2], [status, out.lines.size], err
     end
