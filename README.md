@@ -642,3 +642,5 @@ Nested constants resolve through the alias too (`Store::LockKeys`), so nothing b
 - **Append-only** — database triggers prevent UPDATE/DELETE
 - **Idempotent writes** — `ON CONFLICT (event_id) DO NOTHING`; an append whose ids are all stored returns the stored events, conditional or not; PostgreSQL keeps its single-statement conditional append and only looks the ids up when nothing was written
 - **`Data.define`** for immutable value objects (Event, SequencedEvent, Query, etc.)
+
+See the [project homepage](https://dcb.events) for more.
