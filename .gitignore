@@ -8,3 +8,5 @@ Gemfile.lock
 /autoresearch.*
 /.mutant/
 /.bundle/
+/vendor/bundle/
+/vendor/cache/
