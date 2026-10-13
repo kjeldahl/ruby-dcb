@@ -55,6 +55,10 @@ requires:
   - ./test/sqlite/test_concurrent_append
   - ./test/concurrency/test_concurrent_append
   - ./test/concurrency/test_in_flight_append
+mutation:
+  timeout: 30.0
+hooks:
+  - ./test/support/mutant_hooks.rb
 jobs: 1
 usage: opensource
 matcher:

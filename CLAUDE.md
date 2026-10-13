@@ -26,6 +26,7 @@ Ruby gem implementing the Dynamic Consistency Boundary (DCB) pattern with Postgr
 - PostgreSQL DB: `dcb_event_store_test`
 - Setup: `ruby -Ilib -rpg -e "require 'dcb_event_store'; DcbEventStore::PostgresStore::Schema.create!(PG.connect(dbname: 'dcb_event_store_test'))"`
 - SQLite needs no setup: the tests create a throwaway database file per test (`SqliteDatabaseHelper`), and `SqliteStore::Schema.create!(db)` installs the schema and the connection pragmas
+- Mutant parallelism: `.mutant.yml` runs each worker against its own database (`dcb_event_store_test_w<worker-index>`, created on worker start via `test/support/mutant_hooks.rb`) so concurrent kill-jobs never `TRUNCATE` or advisory-lock one another. `mutation.timeout` is raised to absorb the timing-sensitive subscribe/backoff tests under heavy parallel load.
 
 ## Running tests
 ```sh
